@@ -466,3 +466,10 @@ All changes since v0.14.0:
 - Add optional `appendSidechatDraft` integration: reveal the current parent conversation's side chat, append selected text, and focus its composer without sending or reusing a one-shot side-ask session.
 - Add image selection/paste, preview/removal, image-only and mixed first/follow-up messages, native attachment storage, and pending/history thumbnails.
 - Keep both plugins independent and preserve the main conversation, file/editor, and tool workflows.
+
+## 0.28.1-lhg.2 (LHG fork)
+
+- Port upstream PR #1035: retain compacted side-chat inheritance after model switches rewrite the system prompt, preserving the latest prompt and identical model-visible context with safe full-copy fallback.
+- Preserve LHG draft handoff, native image attachments, and prebuilt Git installs.
+
+Upstream: https://github.com/omdsh-dev/DSH-better-sidebar/pull/1035
