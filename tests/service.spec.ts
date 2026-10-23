@@ -24,6 +24,13 @@ import { createBetterSidebarService, matchUrlTarget, SIDEBAR_FEATURES, SIDEBAR_S
 import { createSidebarStore, allLeaves, makeDefaultState, openDiffTab, openTabInBottomPane, sanitizeState } from '../src/client/state.ts'
 
 describe('BetterSidebar service', () => {
+  it('exposes an optional draft handoff and refuses a missing Side Chat without opening anything', () => {
+    const service = createBetterSidebarService(createSidebarStore())
+    expect(typeof service.appendSidechatDraft).toBe('function')
+    expect(service.features).toContain('appendSidechatDraft')
+    expect(() => service.appendSidechatDraft({ sessionId: 's1', text: 'Selected text' })).toThrow('Side Chat is not available')
+  })
+
   it('registerTab adds to the registry and dispose removes it', () => {
     const store = createSidebarStore()
     const service = createBetterSidebarService(store)

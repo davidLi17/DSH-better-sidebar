@@ -1283,3 +1283,29 @@ better-sidebar 的内置 tab 和 viewer 就是参考实现（"吃狗粮"），�
 
 更多插件接入后欢迎在此登记（一句话 + 链接）。
 
+
+## LHG fork: selected text to the existing Side Chat draft
+
+The optional `ctx.betterSidebar.appendSidechatDraft({ sessionId, text })` method
+reveals the current (or most recently viewed) Side Chat for that parent session,
+appends text separated by a blank line, and focuses its composer with the caret
+at the end. Existing draft text and image attachments remain intact. It never
+sends a prompt. With no mounted Side Chat, it opens one using the normal thread
+reattachment behavior; repeated clicks while it mounts share one pending draft.
+
+Consumers must feature-detect this method: upstream/older installations do not
+provide it. A disabled or unregistered Side Chat throws without opening a tab.
+`requestId` and `source` are accepted as optional caller metadata; they do not
+change delivery or deduplicate intentional repeated selections. Do not pass a
+BTW/fork child ID as `sessionId`: it is the current main conversation's ID.
+This handoff is separate from “add to main conversation” and one-shot side asks.
+
+### 侧边对话图片输入
+
+侧边对话输入框支持选择多张图片和粘贴剪贴板图片，支持图片单独发送或与文字一起发送。发送前显示可移除的缩略图；上传或消息接纳失败时保留文字与图片，避免丢失草稿。发送中的划选桥接文字保留为下一条草稿，不重复保留已提交的前缀。预览使用运行时 Object URL，在移除、回显结束及卸载时释放，不把图片字节持久化到 localStorage。
+
+图片统一使用 DSH 原生 `ctx.attachments.admitPromptContent()` 校验、归一化和持久化，客户端不提交任意附件引用。`sidechat.start` / `sidechat.prompt` 可接收有序 `content`（文本块或 PNG/JPEG/WebP/GIF 的 base64 图片块）；不传 `content` 时沿用旧文字参数。第一条图片消息同样注入侧边对话边界；仅图片的线程以图片名命名。
+
+`sidechat.imageLimits` 返回宿主部署配置。只有上述两条图片接纳路由按宿主图片总字节限制扩展 JSON 预算，其他 API 仍保持 1 MiB 上限。队列和历史均保留原生图片引用；`sidechat.image` 只按当前线程自有日志或待接纳队列查找图片，然后调用原生 `readImage()`，不会读取客户端任意指定的附件引用、路径或 URL。模型是否支持视觉仍由实际选用的模型决定，失败信息会显示在转录中。
+
+图片缩略图、移除按钮及占位文本全部使用 `--dsw-alias-*` 与 `--dsw-font-*` 主题令牌，不引入自定义颜色。

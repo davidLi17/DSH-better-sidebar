@@ -460,3 +460,9 @@ All changes since v0.14.0:
 - 🧪 Test engineering: unit spec split (#141) + flaky smoke cleanup fix
 
 </details>
+
+## 0.28.1-lhg.1 (LHG fork)
+
+- Add optional `appendSidechatDraft` integration: reveal the current parent conversation's side chat, append selected text, and focus its composer without sending or reusing a one-shot side-ask session.
+- Add image selection/paste, preview/removal, image-only and mixed first/follow-up messages, native attachment storage, and pending/history thumbnails.
+- Keep both plugins independent and preserve the main conversation, file/editor, and tool workflows.

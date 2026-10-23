@@ -50,6 +50,8 @@ interface NativeController {
   mounted?: MountedSessions
   /** `ISidebarRight.focus` — focuses the tab and the pane holding it (dsh >= 0.1.5). */
   focus?(tabId: string): void
+  isExpanded?(): boolean
+  toggleExpanded?(): void
   /**
    * Not part of `ISidebarRight`: the concrete controller's per-session writes.
    * The two open faces are kept as the seam a boolean-reporting host API would
@@ -294,6 +296,13 @@ export function createNativeSurface(ctx: Context, records: NativeTabRecords): Na
       // cannot work for them — focus through the controller's own face.
       if (sessionOf(tabId, sessionId) === undefined) return false
       controller()?.focus?.(tabId)
+      return true
+    },
+    reveal(tabId, sessionId) {
+      if (sessionOf(tabId, sessionId) === undefined || sessionId !== mountedSessionId(ctx)) return false
+      const api = controller()
+      api?.focus?.(tabId)
+      if (api?.isExpanded?.() === false) api.toggleExpanded?.()
       return true
     },
     has: (tabId, sessionId) => sessionOf(tabId, sessionId) !== undefined,

@@ -45,7 +45,7 @@ import { AgentOpenRegistry, registerOpenTool, type AgentOpenRequest } from './ag
 import { buildSubagentLiveApi, type SidebarSubagentLiveRoutes } from './subagent-live-route.ts'
 import { buildTeamsApi, type SidebarTeamsRoutes } from './team-routes.ts'
 import { buildWorkflowsApi, type SidebarWorkflowRoutes } from './workflow-routes.ts'
-import { buildSidechatApi } from './sidechat-routes.ts'
+import { buildSidechatApi, sidechatPromptBodyLimit } from './sidechat-routes.ts'
 import { createAssistantLiveBuffer, type AssistantLiveBuffer } from './assistant-live.ts'
 import { readJsonBody, readTextBody, requireString, SidebarError, writeError, writeJson, writeOk } from './wire.ts'
 import { streamFileToResponse } from './file-stream.ts'
@@ -1467,7 +1467,8 @@ export function apply(ctx: Context, config?: SidebarConfig): void {
       const abort = (): void => { controller?.abort() }
       response?.once('close', abort)
       try {
-        const payload = await readJsonBody(req)
+        const payload = await readJsonBody(req, method === 'sidechat.start' || method === 'sidechat.prompt'
+          ? sidechatPromptBodyLimit(ctx) : undefined)
         // Own properties only. The dispatch table is an object literal, so a
         // bare lookup resolved Object.prototype members as "methods":
         // POST /sidebar/api/constructor answered 200 {}, toString answered

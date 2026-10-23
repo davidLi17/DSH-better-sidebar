@@ -13,7 +13,7 @@ import WorkingDirectoryService from '@deepseek-ai/dsh-working-directory'
 import { Session, SessionLogOffset, SESSION_FORMAT_VERSION } from '@deepseek-ai/dsh-session'
 import type { SessionEvent, SessionHeader, SessionId } from '@deepseek-ai/dsh-session'
 import { SUBAGENT_DESCRIPTOR_VERSION } from '@deepseek-ai/dsh-subagent'
-import { buildSidechatApi } from '../src/sidechat-routes.ts'
+import { buildSidechatApi, sidechatPromptBodyLimit } from '../src/sidechat-routes.ts'
 import { SidebarError } from '../src/wire.ts'
 import { buildSidechatInheritance, SIDE_BOUNDARY_PROMPT, SIDE_INJECTION_SOURCE_KIND, SIDE_NEW_THREAD_TITLE, sideLabel } from '../src/sidechat-core.ts'
 import type { Context } from '../src/context-types.ts'
@@ -112,8 +112,10 @@ function ctxWith(services: {
   llm?: unknown
   sessionController?: unknown
   workingDirectory?: unknown
+  attachments?: unknown
 }): Context {
   const table: Record<string, unknown> = {
+    ...(services.attachments === undefined ? {} : { attachments: services.attachments }),
     ...(services.workingDirectory === undefined ? {} : { workingDirectory: services.workingDirectory }),
     ...(services.agents === undefined ? {} : { agents: services.agents }),
     ...(services.agentPresets === undefined ? {} : { agentPresets: services.agentPresets }),
@@ -547,7 +549,7 @@ describe('sidechat.prompt', () => {
     const services = happyServices(undefined, child)
     const api = buildSidechatApi(ctxWith(services))
     const result = await api['sidechat.prompt']({ childId: 'child', text: 'tell me more' })
-    expect(result).toEqual({ accepted: true })
+    expect(result).toEqual({ accepted: true, messageId: expect.any(String) })
     expect(child.inject).not.toHaveBeenCalled()
     expect(child.followup).toHaveBeenCalledTimes(1)
     const message = child.followup.mock.calls[0]![0] as { content: Array<{ text: string }> }
@@ -1099,5 +1101,86 @@ describe('sidechat.info reports the effective route', () => {
       provider: 'cold',
       model: 'cold-model',
     })
+  })
+})
+
+
+describe('sidechat image admission and authorized history reads', () => {
+  const image = { attachmentId: 'img-1', mediaType: 'image/png', bytes: 3, width: 1, height: 1, name: 'shot.png' }
+  const upload = { type: 'image', mediaType: 'image/png', data: 'YWJj', name: 'shot.png' }
+  const limits = { maxImageBytes: 4 << 20, maxMessageImageBytes: 12 << 20, maxImagesPerMessage: 4, maxImagePixels: 16e6, maxImageDimension: 4096, mediaTypes: ['image/png'] }
+  function storage() {
+    return {
+      imageLimits: limits,
+      admitPromptContent: vi.fn(async (parts: unknown[]) => parts.map(part => (part as { type: string }).type === 'image' ? { type: 'image', attachment: image } : part)),
+      isAttachmentError: () => true,
+      readImage: vi.fn(async () => ({ ref: image, data: Buffer.from('abc') })),
+    }
+  }
+
+  it('admits image-only first contact and names it without inserting fake text', async () => {
+    const child = agent('child')
+    const services = happyServices(agent('parent'), child)
+    const attachments = storage()
+    const api = buildSidechatApi(ctxWith({ ...services, attachments }))
+    const result = await api['sidechat.prompt']({ childId: 'child', content: [upload] })
+    expect(attachments.admitPromptContent).toHaveBeenCalledWith([upload])
+    expect(child.inject).toHaveBeenCalledOnce()
+    expect(child.followup.mock.calls[0]![0]).toMatchObject({ content: [{ type: 'image', attachment: image }] })
+    expect(services.rename).toHaveBeenCalledWith(child.session, sideLabel('shot.png'))
+    expect(result).toMatchObject({ accepted: true, messageId: expect.any(String), images: [image] })
+  })
+
+  it('supports initial start and ordered mixed text/image follow-ups', async () => {
+    const child = agent('child', { events: [ev('user/message', 0, { content: [{ type: 'text', text: SIDE_BOUNDARY_PROMPT }], source: { kind: SIDE_INJECTION_SOURCE_KIND } })] })
+    const services = happyServices(agent('parent'), child)
+    const attachments = storage()
+    const api = buildSidechatApi(ctxWith({ ...services, attachments }))
+    const content = [{ type: 'text', text: 'Compare this' }, upload]
+    await api['sidechat.start']({ sessionId: 'parent', content })
+    expect(child.followup.mock.calls[0]![0]).toMatchObject({ content: [content[0], { type: 'image', attachment: image }] })
+    child.inject.mockClear()
+    await api['sidechat.prompt']({ childId: 'child', content })
+    expect(child.inject).not.toHaveBeenCalled()
+    expect(child.followup.mock.calls[1]![0]).toMatchObject({ content: [content[0], { type: 'image', attachment: image }] })
+  })
+
+  it('rejects spoofed references, unsupported types, missing storage and failed admission before enqueue', async () => {
+    const child = agent('child')
+    const services = happyServices(agent('parent'), child)
+    const attachments = storage()
+    const api = buildSidechatApi(ctxWith({ ...services, attachments }))
+    for (const content of [[{ type: 'image', attachment: image }], [{ ...upload, mediaType: 'image/svg+xml' }], [{ ...upload, attachment: image }]]) {
+      await expect(api['sidechat.prompt']({ childId: 'child', content })).rejects.toThrow(SidebarError)
+    }
+    expect(attachments.admitPromptContent).not.toHaveBeenCalled()
+    await expect(buildSidechatApi(ctxWith(services))['sidechat.prompt']({ childId: 'child', content: [upload] })).rejects.toThrow('unavailable')
+    attachments.admitPromptContent.mockRejectedValueOnce(new Error('image byte limit exceeded'))
+    await expect(api['sidechat.prompt']({ childId: 'child', content: [upload] })).rejects.toThrow('image byte limit')
+    expect(child.inject).not.toHaveBeenCalled()
+    expect(child.followup).not.toHaveBeenCalled()
+  })
+
+  it('reads pending and durable images only through their owning thread', async () => {
+    const child = agent('child', {
+      events: [ev('session/end-seed', 0), ev('user/message', 1, { content: [{ type: 'image', attachment: image }] })],
+    })
+    const attachments = storage()
+    const api = buildSidechatApi(ctxWith({ ...happyServices(agent('parent'), child), attachments }))
+    await expect(api['sidechat.image']({ childId: 'child', attachmentId: image.attachmentId })).resolves.toEqual({ mediaType: 'image/png', data: 'YWJj' })
+    await expect(api['sidechat.image']({ childId: 'child', attachmentId: 'foreign-image' })).rejects.toThrow('not found')
+    expect(attachments.readImage).toHaveBeenCalledOnce()
+    const queued = agent('queued', { nextTurn: [{ id: 'queued-image', content: [{ type: 'image', attachment: image }] }] })
+    const queuedApi = buildSidechatApi(ctxWith({ ...happyServices(agent('parent'), queued), attachments }))
+    await expect(queuedApi['sidechat.image']({ childId: 'queued', attachmentId: image.attachmentId })).resolves.toMatchObject({ data: 'YWJj' })
+    expect((await queuedApi['sidechat.events']({ childId: 'queued' })).pending[0]).toMatchObject({ text: '', images: [image] })
+  })
+
+  it('exposes native limits and budgets base64 without increasing ordinary API limits', async () => {
+    const ctx = ctxWith({ attachments: storage() })
+    expect(sidechatPromptBodyLimit(ctx)).toBe((1 << 20) + 4 * Math.ceil(limits.maxMessageImageBytes / 3))
+    expect(sidechatPromptBodyLimit(ctxWith({}))).toBe(1 << 20)
+    await expect(buildSidechatApi(ctx)['sidechat.imageLimits']({})).resolves.toEqual({ available: true, limits })
+    await expect(buildSidechatApi(ctxWith({}))['sidechat.imageLimits']({})).resolves.toEqual({ available: false })
   })
 })

@@ -410,15 +410,19 @@ describe('createNativeSurface activate/close (the real adapter)', () => {
     records: ReturnType<typeof createNativeTabRecords>
     focus: ReturnType<typeof vi.fn>
     close: ReturnType<typeof vi.fn>
+    expand: ReturnType<typeof vi.fn>
   } => {
     const focus = vi.fn()
     const close = vi.fn()
+    const expand = vi.fn()
     const controller = {
       openTab: () => {},
       openResource: () => {},
       close,
       // `ISidebarRight.focus` (dsh >= 0.1.5): the face activate() rides.
       focus,
+      isExpanded: () => false,
+      toggleExpanded: expand,
       mounted: { getSnapshot: () => 's1', subscribe: () => () => {} },
       openTabIn: () => {},
       openResourceIn: () => {},
@@ -430,7 +434,7 @@ describe('createNativeSurface activate/close (the real adapter)', () => {
       sessions: { list: { subscribe: () => () => {}, getSnapshot: () => ({}) } },
     }
     const surface = createNativeSurface(ctx as never, records)
-    return { surface, records, focus, close }
+    return { surface, records, focus, close, expand }
   }
 
   it('activate focuses an existing record through the controller focus face', () => {
@@ -448,6 +452,16 @@ describe('createNativeSurface activate/close (the real adapter)', () => {
     const { surface, focus } = mountSurface()
     expect(surface.activate('missing')).toBe(false)
     expect(focus).not.toHaveBeenCalled()
+  })
+
+  it('reveals the same native side chat and expands a collapsed column without creating a tab', () => {
+    const { surface, records, focus, expand } = mountSurface()
+    records.ensure({ sessionId: 's1', id: 'tab-9', kind: 'sidechat', title: 'Side Chat', params: { meta: { threadId: 't-1' } }, scope })
+    expect(surface.reveal?.('tab-9', 's1')).toBe(true)
+    expect(focus).toHaveBeenCalledWith('tab-9')
+    expect(expand).toHaveBeenCalledTimes(1)
+    expect(surface.reveal?.('tab-9', 'other')).toBe(false)
+    expect(expand).toHaveBeenCalledTimes(1)
   })
 
   it('close returns the record meta and rides the on-screen face for the mounted session', () => {

@@ -559,3 +559,46 @@
     transition: none;
   }
 }
+
+/* Image-only and mixed prompts share the same compact, wrapping thumbnail rail. */
+.sidechatImages {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 4px 0;
+}
+.sidechatImage {
+  display: block;
+  width: 88px;
+  height: 88px;
+  object-fit: cover;
+  border: 1px solid var(--dsw-alias-hairline);
+  border-radius: 8px;
+}
+.sidechatImagePlaceholder {
+  display: flex;
+  align-items: center;
+  width: 88px;
+  min-height: 88px;
+  color: var(--dsw-alias-label-tertiary);
+  font: var(--dsw-font-xxs-12);
+  overflow-wrap: anywhere;
+}
+.sidechatDraftImage { position: relative; }
+.sidechatRemoveImage {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid var(--dsw-alias-hairline);
+  border-radius: 50%;
+  background: var(--dsw-alias-bg-base);
+  color: var(--dsw-alias-label-primary);
+  cursor: pointer;
+}
+.sidechatRemoveImage:disabled { opacity: 0.4; cursor: default; }

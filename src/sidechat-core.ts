@@ -21,6 +21,7 @@
  * a structured text snapshot inside the boundary prompt.
  */
 import type { SidebarHistoryEntry, SidebarSessionSummary } from './context-types.ts'
+import { sidechatImages, type ImageAttachmentRef } from './sidechat-images.ts'
 import type { AssistantLiveChunk } from './assistant-live.ts'
 import { foldSurface, isSurfaceEligibleType } from '@deepseek-ai/dsh-session/surface'
 
@@ -1202,6 +1203,8 @@ export interface SidechatThreadInfo {
 export interface SidechatPendingInput {
   /** Durable message identity — the `sidechat.dequeue` key. */
   id: string
+  /** Durable image references, preserved for queued thumbnails. */
+  images?: ImageAttachmentRef[]
   /** Which boundary will claim it; `next-step` entries are claimed first. */
   target: 'next-turn' | 'next-step'
   /** Flattened text of the message content ('' when it carries no text). */
@@ -1279,7 +1282,8 @@ export function pendingInputs(
   const add = (message: unknown, target: SidechatPendingInput['target']): void => {
     const id = pendingInputId(message)
     if (id === undefined) return
-    rows.push({ id, target, text: pendingText(message) })
+    const images = sidechatImages((message as { content?: unknown })?.content)
+    rows.push({ id, target, text: pendingText(message), ...(images.length > 0 ? { images } : {}) })
   }
   for (const message of nextStep) add(message, 'next-step')
   for (const message of nextTurn) add(message, 'next-turn')

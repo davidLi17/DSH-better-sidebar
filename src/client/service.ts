@@ -31,6 +31,8 @@ import { hostRouteUrl as resolveHostRoute } from './host-route-url.ts'
 import { builtinFileIcon, builtinFolderIcon } from './file-icons.tsx'
 import type { SessionScope } from './api.ts'
 import type { SidebarPrefs } from '../prefs-shared.ts'
+import { deliverSidechatDraft, type SidechatDraftInput } from './sidechat-draft-bridge.ts'
+export type { SidechatDraftInput } from './sidechat-draft-bridge.ts'
 
 /**
  * Public state vocabulary re-exported for consumers (type-only; the values
@@ -606,6 +608,8 @@ export interface SidebarSurface {
   update(tabId: string, patch: { title?: string; path?: string; meta?: unknown }, sessionId?: string): boolean
   /** Focus a native tab through the host controller; false when it is not native (same `sessionId` rule as `update`). */
   activate(tabId: string, sessionId?: string): boolean
+  /** Reveal an existing native tab, expanding its column when collapsed. */
+  reveal?(tabId: string, sessionId: string): boolean
   /** Whether a tab id belongs to the native surface (same `sessionId` rule as `update`). */
   has(tabId: string, sessionId?: string): boolean
 }
@@ -614,6 +618,9 @@ export interface SidebarSurface {
  * The registry service published as `ctx.betterSidebar`.
  */
 export interface BetterSidebarService {
+  /** Reveal this session's side chat and append selected text without sending.
+   * Existing draft text and attachments are preserved; the caret lands at end. */
+  appendSidechatDraft(input: SidechatDraftInput): void
   registerTab(descriptor: TabDescriptor): () => void
   registerFileViewer(descriptor: FileViewerDescriptor): () => void
   registerFileIcon(descriptor: FileIconDescriptor): () => void
@@ -819,7 +826,7 @@ export function matchUrlTarget(tabs: readonly TabDescriptor[], url: URL): TabDes
  * The plugin version this service instance reports. Keep in lockstep with
  * `package.json`'s version — `tests/service.spec.ts` asserts the pair.
  */
-export const SIDEBAR_SERVICE_VERSION = '0.28.0'
+export const SIDEBAR_SERVICE_VERSION = '0.28.1-lhg.1'
 
 /**
  * Monotonic capability list consumers use to gate new API usage (features
@@ -862,6 +869,7 @@ export const SIDEBAR_FEATURES = [
   'rightActions',
   'settingPatterns',
   'hostRouteUrl',
+  'appendSidechatDraft',
 ] as const
 
 /** Run one plugin callback; a throw is logged and never breaks the caller. */
@@ -1401,6 +1409,20 @@ export function createBetterSidebarService(store: SidebarStore): BetterSidebarSe
   }
 
   return {
+    appendSidechatDraft: (input: SidechatDraftInput): void => {
+      if (!tabs.has('sidechat') || !isTabEnabled('sidechat')) {
+        throw new Error('Side Chat is not available or is disabled')
+      }
+      deliverSidechatDraft(
+        input,
+        tabId => {
+          if (surface?.reveal?.(tabId, input.sessionId) !== true) {
+            activateTab(tabId, { sessionId: input.sessionId })
+          }
+        },
+        () => openTab({ type: 'sidechat' }, { sessionId: input.sessionId }),
+      )
+    },
     registerTab,
     registerFileViewer,
     registerFileIcon,

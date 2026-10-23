@@ -21,6 +21,8 @@
  * - a cold thread (DSH restart, or a closed thread) is resumed with
  *   AgentRegistry.resume, composing the preset the child recorded.
  */
+import type { AttachmentStore } from '@deepseek-ai/dsh-attachment'
+import { sidechatImages, SIDECHAT_IMAGE_TYPES, type ImageAttachmentLimits, type ImageAttachmentRef, type PromptContentPart } from './sidechat-images.ts'
 import { randomUUID } from 'node:crypto'
 import { createUserMessage, ReasoningEffortId, type ContentBlock, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { MessageId } from '@deepseek-ai/dsh-llm/brand'
@@ -112,7 +114,11 @@ export interface SidechatRoutes {
    *  boundary + snapshot and earns the thread its real label. */
   'sidechat.start'(payload: unknown): Promise<{ childId: string }>
   /** Deliver one follow-up message to a thread (live, or cold-resumed). */
-  'sidechat.prompt'(payload: unknown): Promise<{ accepted: true }>
+  'sidechat.prompt'(payload: unknown): Promise<{ accepted: true; messageId: string; images?: ImageAttachmentRef[] }>
+  /** Deployment-resolved native image admission limits. */
+  'sidechat.imageLimits'(payload: unknown): Promise<{ available: boolean; limits?: ImageAttachmentLimits }>
+  /** Read only an image already owned by this thread's log or pending inbox. */
+  'sidechat.image'(payload: unknown): Promise<{ mediaType: string; data: string }>
   /** Abort the thread's running turn (queued work is preserved). */
   'sidechat.cancel'(payload: unknown): Promise<{ accepted: true }>
   /** Release the thread's live agent (session and history stay persisted). */
@@ -234,9 +240,10 @@ function textPrompt(text: string): ContentBlock[] {
 }
 
 /** Admit one user message to a live agent through the stock followup path. */
-function admitFollowup(agent: Agent, blocks: ContentBlock[]): void {
+function admitFollowup(agent: Agent, blocks: ContentBlock[]): string {
   const message: UserMessage = createUserMessage({ content: blocks, source: { kind: 'user' } })
   agent.followup(message)
+  return message.id
 }
 
 /**
@@ -253,12 +260,59 @@ function admitFollowup(agent: Agent, blocks: ContentBlock[]): void {
  * is structural; its text still opens with SIDE_BOUNDARY_PREFIX, keeping
  * boundaryDelivered intact.
  */
-function admitFirstContact(agent: Agent, injectionText: string, question: string): void {
+function admitFirstContact(agent: Agent, injectionText: string, question: ContentBlock[]): string {
   agent.inject(createUserMessage({
     content: textPrompt(injectionText),
     source: { kind: SIDE_INJECTION_SOURCE_KIND },
   }))
-  admitFollowup(agent, textPrompt(question))
+  return admitFollowup(agent, question)
+}
+
+/** Optional native attachment capability; never create a competing image store. */
+function attachmentStore(ctx: Context): AttachmentStore | undefined {
+  return ctx.get('attachments') as AttachmentStore | undefined
+}
+
+/** Only image-bearing prompt routes may exceed the ordinary 1 MiB JSON cap. */
+export function sidechatPromptBodyLimit(ctx: Context): number {
+  const bytes = attachmentStore(ctx)?.imageLimits.maxMessageImageBytes ?? 0
+  return (1 << 20) + (Number.isSafeInteger(bytes) && bytes > 0 ? 4 * Math.ceil(bytes / 3) : 0)
+}
+
+/** Narrow untrusted wire parts before native validation, rejecting caller-supplied refs. */
+async function promptBlocks(ctx: Context, payload: unknown, fallback: string): Promise<ContentBlock[]> {
+  const raw = (payload as { content?: unknown })?.content
+  if (raw === undefined) return fallback === '' ? [] : textPrompt(fallback)
+  if (!Array.isArray(raw) || raw.length > 1024) throw new SidebarError('bad-request', 'content must be a bounded array')
+  const parts: PromptContentPart[] = raw.map((part: unknown) => {
+    if (part === null || typeof part !== 'object') throw new SidebarError('bad-request', 'invalid content part')
+    const p = part as Record<string, unknown>
+    if (p.type === 'text' && typeof p.text === 'string') return { type: 'text', text: p.text }
+    if (p.type !== 'image' || typeof p.mediaType !== 'string'
+      || !SIDECHAT_IMAGE_TYPES.includes(p.mediaType as typeof SIDECHAT_IMAGE_TYPES[number])
+      || typeof p.data !== 'string' || p.attachment !== undefined
+      || (p.name !== undefined && (typeof p.name !== 'string' || p.name.length > 1024))) {
+      throw new SidebarError('bad-request', 'Images must be uploaded as PNG, JPEG, WebP or GIF bytes, not attachment references')
+    }
+    return { type: 'image', mediaType: p.mediaType as typeof SIDECHAT_IMAGE_TYPES[number], data: p.data,
+      ...(typeof p.name === 'string' ? { name: p.name } : {}) }
+  })
+  const clean = parts.filter(part => part.type === 'image' || part.text.trim() !== '')
+  if (!clean.some(part => part.type === 'image')) return clean as ContentBlock[]
+  const store = attachmentStore(ctx)
+  if (store === undefined) throw new SidebarError('bad-request', 'Image attachments are unavailable in this DSH host')
+  try {
+    return await store.admitPromptContent(clean)
+  } catch (error) {
+    if (store.isAttachmentError(error)) throw new SidebarError('bad-request', error.message)
+    throw error
+  }
+}
+
+/** Image-only first prompts still earn a meaningful durable title. */
+function promptTitle(blocks: ContentBlock[]): string {
+  const text = blocks.filter(block => block.type === 'text').map(block => block.text).join(' ').trim()
+  return text || sidechatImages(blocks)[0]?.name || 'Image'
 }
 
 /** The live thread agent, or undefined (cold — the caller resumes). */
@@ -611,6 +665,8 @@ export function buildSidechatApi(ctx: Context, live?: AssistantLiveBuffer): Side
       const sessionId = requireString(payload, 'sessionId')
       const rawQuestion = (payload as { question?: unknown }).question
       const question = typeof rawQuestion === 'string' ? rawQuestion.trim() : ''
+      const content = await promptBlocks(ctx, payload, question)
+      const title = promptTitle(content)
       const parent = liveThreadAgent(ctx, sessionId)
       if (parent === undefined) {
         throw new SidebarError('sidechat-error', `parent session "${sessionId}" is not running`, 409)
@@ -640,7 +696,7 @@ export function buildSidechatApi(ctx: Context, live?: AssistantLiveBuffer): Side
         resolvePresetId(parentSession.header, parentSession.snapshotEvents()),
       )
       const childId = `session-${randomUUID()}` as SessionId
-      const label = question === '' ? SIDE_NEW_THREAD_TITLE : sideLabel(question)
+      const label = content.length === 0 ? SIDE_NEW_THREAD_TITLE : sideLabel(title)
       // Honest catalog citizenship: the durable descriptor keeps the thread
       // a HEALTHY row in the host's subagents.list — a cold child without
       // one is deterministically rendered as a 'corrupt' diagnostic. The
@@ -758,7 +814,7 @@ export function buildSidechatApi(ctx: Context, live?: AssistantLiveBuffer): Side
           // Keep the auto-generated title; the thread stays usable.
         }
       }
-      if (question === '') {
+      if (content.length === 0) {
         // Codex-style immediate create: no prompt yet — the composer owns
         // the first message; the snapshot waits for it.
         if (inheritance.snapshot !== null) pendingSnapshots.set(childId, inheritance.snapshot)
@@ -766,24 +822,25 @@ export function buildSidechatApi(ctx: Context, live?: AssistantLiveBuffer): Side
       } else {
         const promptParts = [SIDE_BOUNDARY_PROMPT]
         if (inheritance.snapshot !== null) promptParts.push(inheritance.snapshot)
-        admitFirstContact(handle.agent, promptParts.join('\n\n'), question)
-        pinTitle(sideLabel(question))
+        admitFirstContact(handle.agent, promptParts.join('\n\n'), content)
+        pinTitle(sideLabel(title))
       }
       return { childId }
     },
 
     'sidechat.prompt': async (payload: unknown) => {
       const childId = requireString(payload, 'childId')
-      const text = requireString(payload, 'text').trim()
-      if (text === '') {
-        throw new SidebarError('bad-request', 'text is required')
-      }
+      const rawText = (payload as { text?: unknown }).text
+      const text = typeof rawText === 'string' ? rawText.trim() : ''
+      const content = await promptBlocks(ctx, payload, text)
+      if (content.length === 0) throw new SidebarError('bad-request', 'text or an image is required')
+      let messageId: string
       // Cold thread: resume the persisted session under its recorded
       // composition, sweep the inherited ghosts, then deliver the follow-up.
       const agent = await ensureLiveThread(ctx, childId)
       if (boundaryDelivered(agent.session.snapshotEvents() as unknown as readonly SidechatLogEvent[])
         || boundaryPending(agent)) {
-        admitFollowup(agent, textPrompt(text))
+        messageId = admitFollowup(agent, content)
       } else {
         // First message of an immediately-created thread: it carries the
         // boundary (+ the snapshot parked at creation, if still around)
@@ -792,17 +849,43 @@ export function buildSidechatApi(ctx: Context, live?: AssistantLiveBuffer): Side
         const snapshot = pendingSnapshots.get(childId)
         pendingSnapshots.delete(childId)
         if (snapshot !== undefined) parts.push(snapshot)
-        admitFirstContact(agent, parts.join('\n\n'), text)
+        messageId = admitFirstContact(agent, parts.join('\n\n'), content)
         const titles = ctx.get('sessionTitle') as SidebarSessionTitleService | undefined
         if (titles !== undefined) {
           try {
-            titles.rename(agent.session, sideLabel(text))
+            titles.rename(agent.session, sideLabel(promptTitle(content)))
           } catch {
             // Keep the placeholder title; the thread stays usable.
           }
         }
       }
-      return { accepted: true as const }
+      return { accepted: true as const, messageId, ...(sidechatImages(content).length > 0 ? { images: sidechatImages(content) } : {}) }
+    },
+
+    'sidechat.imageLimits': async () => {
+      const store = attachmentStore(ctx)
+      return store === undefined ? { available: false } : { available: true, limits: store.imageLimits }
+    },
+
+    'sidechat.image': async (payload: unknown) => {
+      const childId = requireString(payload, 'childId')
+      const id = requireString(payload, 'attachmentId')
+      const store = attachmentStore(ctx)
+      if (store === undefined) throw new SidebarError('bad-request', 'Image attachments are unavailable in this DSH host')
+      const events = threadOwnLogEvents(await threadLogEvents(ctx, childId))
+      let ref: ImageAttachmentRef | undefined
+      for (const event of events) {
+        if (event.type !== 'user/message') continue
+        ref = sidechatImages((event.data as { content?: unknown }).content).find(image => image.attachmentId === id)
+        if (ref !== undefined) break
+      }
+      if (ref === undefined) {
+        const agent = liveThreadAgent(ctx, childId)
+        ref = agent === undefined ? undefined : pendingOf(agent).flatMap(item => item.images ?? []).find(image => image.attachmentId === id)
+      }
+      if (ref === undefined) throw new SidebarError('not-found', 'Image not found in this side conversation', 404)
+      const image = await store.readImage(ref)
+      return { mediaType: image.ref.mediaType, data: Buffer.from(image.data).toString('base64') }
     },
 
     'sidechat.cancel': async (payload: unknown) => {

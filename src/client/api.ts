@@ -7,6 +7,7 @@
  * is still hydrating at page load (a detached session would otherwise fail the
  * request). Failures surface as {@link SidebarApiError} with the wire code.
  */
+import type { ImageAttachmentLimits, ImageAttachmentRef, PromptContentPart } from '../sidechat-images.ts'
 import { encodeHtmlUrl } from '../html-route.ts'
 import { hostRouteUrl } from './host-route-url.ts'
 import { resolveSidebarPath } from './paths.ts'
@@ -603,11 +604,15 @@ export const api = {
   /** Create a Side Chat thread: a child session seeded with the parent's
    *  full log up to now. Empty question = immediate create (Codex-style):
    *  the thread opens empty, the first prompt carries the boundary. */
-  sidechatStart: (sessionId: string, question?: string) =>
-    call<{ childId: string }>('sidechat.start', { sessionId, question: question ?? '' }),
+  sidechatStart: (sessionId: string, question?: string, content?: PromptContentPart[]) =>
+    call<{ childId: string }>('sidechat.start', { sessionId, question: question ?? '', ...(content === undefined ? {} : { content }) }),
   /** Deliver one follow-up message to a Side Chat thread. */
-  sidechatPrompt: (childId: string, text: string) =>
-    call<{ accepted: true }>('sidechat.prompt', { childId, text }),
+  sidechatPrompt: (childId: string, text: string, content?: PromptContentPart[]) =>
+    call<{ accepted: true; messageId: string; images?: ImageAttachmentRef[] }>('sidechat.prompt', { childId, text, ...(content === undefined ? {} : { content }) }),
+  sidechatImageLimits: () =>
+    call<{ available: boolean; limits?: ImageAttachmentLimits }>('sidechat.imageLimits', {}),
+  sidechatImage: (childId: string, attachmentId: string, signal?: AbortSignal) =>
+    call<{ mediaType: string; data: string }>('sidechat.image', { childId, attachmentId }, signal),
   /** Abort a Side Chat thread's running turn (queued work is preserved). */
   sidechatCancel: (childId: string) =>
     call<{ accepted: true }>('sidechat.cancel', { childId }),

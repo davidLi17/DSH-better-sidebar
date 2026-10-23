@@ -57,7 +57,7 @@ export interface SidebarOk<T> { ok: true; value: T }
 export interface SidebarErr { ok: false; error: { code: SidebarErrorCode; message: string } }
 
 /** Read and parse the JSON request body (bounded; malformed → bad-request). */
-export async function readJsonBody(req: SidebarHttpRequest): Promise<unknown> {
+export async function readJsonBody(req: SidebarHttpRequest, limit = MAX_BODY_BYTES): Promise<unknown> {
   const chunks: Buffer[] = []
   let total = 0
   for await (const chunk of req) {
@@ -65,7 +65,7 @@ export async function readJsonBody(req: SidebarHttpRequest): Promise<unknown> {
     // both (and the real runtime chunks are node Buffers anyway).
     const buffer = Buffer.from(chunk)
     total += buffer.length
-    if (total > MAX_BODY_BYTES) {
+    if (total > limit) {
       throw new SidebarError('bad-request', 'request body too large')
     }
     chunks.push(buffer)

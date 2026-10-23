@@ -18,6 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createElement } from 'react'
 import { act } from 'react-dom/test-utils'
 import { renderRoot, setupReactAct } from './test-utils.ts'
+import { deliverSidechatDraft } from '../src/client/sidechat-draft-bridge.ts'
 import { SideChatView } from '../src/client/SideChatView.tsx'
 import { attachLocale } from '../src/client/locales.ts'
 import type { Context, SidebarSessionList } from '../src/context-types.ts'
@@ -207,6 +208,8 @@ let startCalls = 0
 let promptHold: Promise<void> | null = null
 /** Non-null to make `sidechat.prompt` answer a failed envelope. */
 let promptError: string | null = null
+let promptCalls: Record<string, unknown>[] = []
+let promptMessageId: string | undefined
 
 /** EVENTS with the durable user message carrying an identity (dedupe cases). */
 function eventsWithUserId(id: string, text?: string): unknown[] {
@@ -246,6 +249,8 @@ beforeEach(() => {
   startCalls = 0
   promptHold = null
   promptError = null
+  promptCalls = []
+  promptMessageId = undefined
   vi.stubGlobal('fetch', async (url: string | URL, init?: RequestInit) => {
     const method = String(url).split('/').pop()
     const payload: Record<string, unknown> = init?.body === undefined
@@ -271,7 +276,12 @@ beforeEach(() => {
       pendingValue = pendingValue.filter(item => (item as { id?: unknown }).id !== payload.messageId)
       return jsonResponse({ ok: true, value: { accepted: true, removed: 1 } })
     }
+    if (method === 'sidechat.imageLimits') return jsonResponse({ ok: true, value: { available: true, limits: {
+      maxImageBytes: 1024, maxMessageImageBytes: 2048, maxImagesPerMessage: 2, maxImagePixels: 10000, maxImageDimension: 100, mediaTypes: ['image/png'],
+    } } })
+    if (method === 'sidechat.image') return jsonResponse({ ok: true, value: { mediaType: 'image/png', data: 'YWJj' } })
     if (method === 'sidechat.prompt') {
+      promptCalls.push(payload)
       if (promptError !== null) {
         return {
           ok: false,
@@ -280,7 +290,7 @@ beforeEach(() => {
         } as unknown as Response
       }
       if (promptHold !== null) await promptHold
-      return jsonResponse({ ok: true, value: { accepted: true } })
+      return jsonResponse({ ok: true, value: { accepted: true, messageId: promptMessageId } })
     }
     return jsonResponse({ ok: true, value: {} })
   })
@@ -698,6 +708,109 @@ describe('SideChatView queue, echo and model picker', () => {
     expect(items).toHaveLength(1)
     expect(items[0]?.disabled).toBe(true)
     expect(items[0]?.textContent).toContain('继承主对话')
+    unmount()
+  })
+})
+
+
+describe('SideChatView image input', () => {
+  let revoke: ReturnType<typeof vi.fn<(url: string) => void>>
+  beforeEach(() => {
+    let nextUrl = 0
+    const OriginalURL = URL
+    revoke = vi.fn<(url: string) => void>()
+    vi.stubGlobal('URL', class extends OriginalURL {
+      static createObjectURL = vi.fn(() => `blob:test-${++nextUrl}`)
+      static revokeObjectURL = revoke
+    })
+  })
+  async function choose(container: HTMLElement, files: File[]): Promise<void> {
+    const input = container.querySelector<HTMLInputElement>('input[type="file"]')!
+    Object.defineProperty(input, 'files', { value: files, configurable: true })
+    await act(async () => { input.dispatchEvent(new Event('change', { bubbles: true })) })
+  }
+  async function send(container: HTMLElement): Promise<void> {
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('button[aria-label="发送"]')!.click()
+      await vi.waitFor(() => expect(promptCalls.length).toBeGreaterThan(0), { interval: 5 })
+    })
+  }
+  it('selects multiple images, enables image-only send and submits ordered native parts', async () => {
+    const { container, unmount } = renderRoot(createElement(SideChatView, viewProps(makeCtx(threadStore()))))
+    await act(async () => {})
+    await choose(container, [new File(['abc'], 'one.png', { type: 'image/png' }), new File(['def'], 'two.png', { type: 'image/png' })])
+    expect(container.querySelectorAll('img')).toHaveLength(2)
+    expect(container.querySelector<HTMLButtonElement>('button[aria-label="发送"]')?.disabled).toBe(false)
+    await send(container)
+    expect(promptCalls[0]).toMatchObject({ childId: 't1', text: '', content: [
+      { type: 'image', mediaType: 'image/png', data: 'YWJj', name: 'one.png' },
+      { type: 'image', mediaType: 'image/png', data: 'ZGVm', name: 'two.png' },
+    ] })
+    expect(container.querySelectorAll('button[aria-label^="移除图片"]')).toHaveLength(0)
+    expect(revoke).not.toHaveBeenCalled() // local echo still owns both previews
+    unmount()
+    expect(revoke).toHaveBeenCalledTimes(2)
+  })
+  it('pastes image files without losing the text draft and supports remove/reselect', async () => {
+    const { container, unmount } = renderRoot(createElement(SideChatView, viewProps(makeCtx(threadStore()))))
+    await act(async () => {})
+    act(() => typeComposer(container, 'my note'))
+    const paste = new Event('paste', { bubbles: true, cancelable: true })
+    Object.defineProperty(paste, 'clipboardData', { value: { files: [new File(['abc'], 'paste.png', { type: 'image/png' })], getData: () => '' } })
+    await act(async () => { container.querySelector('textarea')!.dispatchEvent(paste) })
+    expect(paste.defaultPrevented).toBe(true)
+    expect(container.querySelector('textarea')?.value).toBe('my note')
+    expect(container.querySelectorAll('img')).toHaveLength(1)
+    await act(async () => { container.querySelector<HTMLButtonElement>('button[aria-label="移除图片：paste.png"]')!.click() })
+    expect(revoke).toHaveBeenCalledWith('blob:test-1')
+    await choose(container, [new File(['abc'], 'paste.png', { type: 'image/png' })])
+    expect(container.querySelectorAll('img')).toHaveLength(1)
+    await send(container)
+    expect(promptCalls[0]).toMatchObject({ content: [{ type: 'text', text: 'my note' }, { type: 'image', name: 'paste.png' }] })
+    unmount()
+  })
+  it('preserves text and previews after failure and rejects oversize/unsupported files atomically', async () => {
+    promptError = 'Image rejected by host'
+    const { container, unmount } = renderRoot(createElement(SideChatView, viewProps(makeCtx(threadStore()))))
+    await act(async () => {})
+    act(() => typeComposer(container, 'keep this'))
+    await choose(container, [new File(['abc'], 'keep.png', { type: 'image/png' })])
+    await send(container)
+    expect(container.querySelector('textarea')?.value).toBe('keep this')
+    expect(container.querySelectorAll('img')).toHaveLength(1)
+    expect(container.textContent).toContain('Image rejected by host')
+    expect(revoke).not.toHaveBeenCalled()
+    await choose(container, [new File(['abc'], 'bad.svg', { type: 'image/svg+xml' })])
+    expect(container.querySelectorAll('img')).toHaveLength(1)
+    await choose(container, [new File(['x'.repeat(1025)], 'big.png', { type: 'image/png' })])
+    expect(container.querySelectorAll('img')).toHaveLength(1)
+    unmount()
+    expect(revoke).toHaveBeenCalledTimes(1)
+  })
+  it('loads durable and queued thumbnails and releases history object URLs', async () => {
+    const image = { attachmentId: 'img-1', mediaType: 'image/png', bytes: 3, width: 1, height: 1, name: 'history.png' }
+    eventsValue = [{ type: 'user/message', seq: 1, time: 1, surfaceOp: 'append', data: { id: 'm1', source: { kind: 'user' }, content: [{ type: 'image', attachment: image }] } }]
+    pendingValue = [{ id: 'm2', text: '', target: 'next-turn', images: [{ ...image, attachmentId: 'img-2', name: 'pending.png' }] }]
+    const { container, unmount } = renderRoot(createElement(SideChatView, viewProps(makeCtx(threadStore()))))
+    await act(async () => {})
+    await act(async () => {})
+    expect(container.querySelectorAll('img')).toHaveLength(2)
+    expect(container.querySelector('img[alt="history.png"]')).not.toBeNull()
+    expect(container.querySelector('img[alt="pending.png"]')).not.toBeNull()
+    unmount()
+    expect(revoke).toHaveBeenCalledTimes(2)
+  })
+  it('keeps only a bridge-appended suffix after an in-flight send succeeds', async () => {
+    let finish!: () => void
+    promptHold = new Promise(resolve => { finish = resolve })
+    const { container, unmount } = renderRoot(createElement(SideChatView, viewProps(makeCtx(threadStore()))))
+    await act(async () => {})
+    act(() => typeComposer(container, 'Question'))
+    await send(container)
+    act(() => { deliverSidechatDraft({ sessionId: 'root', text: 'Selection' }, () => {}, () => {}) })
+    expect(container.querySelector('textarea')?.value).toBe('Question\n\nSelection')
+    await act(async () => { finish() })
+    expect(container.querySelector('textarea')?.value).toBe('Selection')
     unmount()
   })
 })

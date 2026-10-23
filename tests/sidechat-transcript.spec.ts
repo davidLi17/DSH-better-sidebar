@@ -587,3 +587,25 @@ describe('transcriptRows row reuse (newer row kinds)', () => {
     expect(after[0]).toMatchObject({ kind: 'tool', executing: false })
   })
 })
+
+
+describe('sidechat image transcript rows', () => {
+  const image = { attachmentId: 'img-1', mediaType: 'image/png', bytes: 3, width: 1, height: 1, name: 'shot.png' }
+  it('preserves images and does not insert ellipsis for image-only messages', () => {
+    const rows = transcriptRows([entry(ev('user/message', 1, { id: 'm1', content: [{ type: 'image', attachment: image }], source: { kind: 'user' } }))])
+    expect(rows).toEqual([{ kind: 'user', seq: 1, messageId: 'm1', text: '', images: [image] }])
+  })
+  it('preserves mixed text and images and invalidates row reuse when images change', () => {
+    const event = (attachmentId: string) => entry(ev('user/message', 1, { content: [...textBlocks('look'), { type: 'image', attachment: { ...image, attachmentId } }], source: { kind: 'user' } }))
+    const previous = transcriptRows([event('img-1')])
+    const unchanged = transcriptRows([event('img-1')], previous)
+    expect(unchanged[0]).toBe(previous[0])
+    const changed = transcriptRows([event('img-2')], previous)
+    expect(changed[0]).not.toBe(previous[0])
+    expect(changed[0]).toMatchObject({ text: 'look', images: [{ attachmentId: 'img-2' }] })
+  })
+  it('ignores URL-like and malformed image blocks', () => {
+    const rows = transcriptRows([entry(ev('user/message', 1, { content: [{ type: 'image', url: 'javascript:bad' }, { type: 'image', attachment: { ...image, mediaType: 'image/svg+xml' } }], source: { kind: 'user' } }))])
+    expect(rows[0]).not.toHaveProperty('images')
+  })
+})

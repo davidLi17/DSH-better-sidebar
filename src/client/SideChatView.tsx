@@ -86,6 +86,9 @@ import {
   type SidechatToolCard,
   type SidechatTranscriptRow,
 } from './sidechat-transcript.ts'
+import type { ImageAttachmentRef, PromptContentPart } from '../sidechat-images.ts'
+import { sidechatImagePart, validateSidechatImages, type SidechatDraftImage } from './sidechat-image-input.ts'
+import { useSidechatDraftBridge } from './sidechat-draft-bridge.ts'
 import { api } from './api.ts'
 import { usePolling } from './use-polling.ts'
 import { useSidechatPush } from './use-sidechat-push.ts'
@@ -469,15 +472,43 @@ function toolLeading(name: string, failed: boolean): React.ReactNode {
   }
 }
 
+/** Resolve history images through their owning thread, never an arbitrary URL or ref. */
+function HistoryImage({ threadId, attachment }: { threadId: string; attachment: ImageAttachmentRef }): React.ReactNode {
+  const [url, setUrl] = useState<string | null>(null)
+  const [failed, setFailed] = useState(false)
+  useEffect(() => {
+    const controller = new AbortController()
+    let owned: string | undefined
+    setUrl(null)
+    setFailed(false)
+    void api.sidechatImage(threadId, attachment.attachmentId, controller.signal).then(result => {
+      if (controller.signal.aborted) return
+      const bytes = Uint8Array.from(atob(result.data), char => char.charCodeAt(0))
+      owned = URL.createObjectURL(new Blob([bytes], { type: result.mediaType }))
+      setUrl(owned)
+    }).catch(() => { if (!controller.signal.aborted) setFailed(true) })
+    return () => { controller.abort(); if (owned !== undefined) URL.revokeObjectURL(owned) }
+  }, [threadId, attachment.attachmentId])
+  const name = attachment.name ?? t('sideChatImage')
+  if (url === null) return <span className={css.sidechatImagePlaceholder} role={failed ? 'status' : undefined}>{failed ? t('sideChatImageLoadFailed') : name}</span>
+  return <a href={url} target="_blank" rel="noopener noreferrer" title={name}><img className={css.sidechatImage} src={url} alt={name} /></a>
+}
+
+function HistoryImages({ threadId, images }: { threadId: string; images?: ImageAttachmentRef[] }): React.ReactNode {
+  if (images === undefined || images.length === 0) return null
+  return <div className={css.sidechatImages}>{images.map((attachment, index) => <HistoryImage key={`${attachment.attachmentId}:${index}`} threadId={threadId} attachment={attachment} />)}</div>
+}
+
 /** One row renderer (React keys ride the source event seq). `rewrite` is the
  *  surface's markdown link pass — the rows are model prose, so a relative link
  *  resolves against the session cwd (see use-markdown-surface). */
-function renderRow(row: SidechatTranscriptRow, labels: RowLabels, rewrite: (text: string) => string): React.ReactNode {
+function renderRow(row: SidechatTranscriptRow, labels: RowLabels, rewrite: (text: string) => string, threadId: string): React.ReactNode {
   switch (row.kind) {
     case 'user':
       return (
         <div key={`${row.kind}:${row.seq}`} className={css.sidechatUser}>
-          <MarkdownText {...markdownTextProps(rewrite(row.text), labels)} />
+          <HistoryImages threadId={threadId} images={row.images} />
+          {row.text !== '' && <MarkdownText {...markdownTextProps(rewrite(row.text), labels)} />}
         </div>
       )
     case 'assistant':
@@ -634,6 +665,8 @@ export function SideChatView(props: {
   const autoCreate = (tab.meta as { autoCreate?: unknown } | undefined)?.autoCreate === true
 
   const [composer, setComposer] = useState('')
+  const [images, setImages] = useState<SidechatDraftImage[]>([])
+  const [addingImages, setAddingImages] = useState(false)
   const [busy, setBusy] = useState<'starting' | 'sending' | 'saving' | 'archiving' | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
@@ -646,7 +679,7 @@ export function SideChatView(props: {
    *  pending or logs it durably (see the drop effect below). `seq` is the
    *  transcript tail at send time, so an OLDER identical message cannot
    *  retire the echo. */
-  const [echo, setEcho] = useState<{ text: string; seq: number } | null>(null)
+  const [echo, setEcho] = useState<{ text: string; seq: number; messageId?: string; images: SidechatDraftImage[] } | null>(null)
 
   const cacheRef = useRef<ThreadCache>({ entries: [], live: [], pending: [] })
   // The previous poll's rows (see the mapping's reuse pass below).
@@ -668,6 +701,53 @@ export function SideChatView(props: {
     chatSurfaceRef(element)
   }, [chatSurfaceRef])
   const composerRef = useRef<HTMLTextAreaElement | null>(null)
+  useSidechatDraftBridge({ sessionId: scope.sessionId, tabId: tab.id, visible, composer, setComposer, composerRef })
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const imageUrlsRef = useRef(new Set<string>())
+  const addingImagesRef = useRef(false)
+  const mountedRef = useRef(true)
+  useEffect(() => {
+    mountedRef.current = true
+    const urls = imageUrlsRef.current
+    return () => {
+      mountedRef.current = false
+      for (const url of urls) URL.revokeObjectURL(url)
+      urls.clear()
+    }
+  }, [])
+  useEffect(() => {
+    const retained = new Set([...images, ...(echo?.images ?? [])].map(image => image.url))
+    for (const url of imageUrlsRef.current) {
+      if (retained.has(url)) continue
+      URL.revokeObjectURL(url)
+      imageUrlsRef.current.delete(url)
+    }
+  }, [images, echo])
+
+  const addImages = async (files: File[]): Promise<void> => {
+    if (files.length === 0 || busy !== null || addingImagesRef.current) return
+    addingImagesRef.current = true
+    setAddingImages(true)
+    setError(null)
+    try {
+      const policy = await api.sidechatImageLimits()
+      if (!mountedRef.current) return
+      if (!policy.available || policy.limits === undefined) throw new Error(t('sideChatImagesUnavailable'))
+      validateSidechatImages(files, images, policy.limits)
+      const added = files.map(file => {
+        const url = URL.createObjectURL(file)
+        imageUrlsRef.current.add(url)
+        return { id: url, file, url }
+      })
+      setImages(previous => [...previous, ...added])
+    } catch (cause) {
+      if (mountedRef.current) setError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      addingImagesRef.current = false
+      if (mountedRef.current) setAddingImages(false)
+    }
+  }
+
 
   const summary = threadId === undefined ? undefined : list.byId[threadId]
   const running = summary?.running === true
@@ -931,18 +1011,18 @@ export function SideChatView(props: {
   const echoText = echo?.text ?? ''
   useEffect(() => {
     if (echo === null || busy === 'sending') return
-    if (pendingRows.some(item => item.text === echo.text)) {
+    if (pendingRows.some(item => echo.messageId !== undefined ? item.id === echo.messageId : echo.images.length === 0 && item.text === echo.text)) {
       setEcho(null)
       return
     }
-    if (rows.some(row => row.kind === 'user' && row.seq > echo.seq && row.text === echo.text)) {
+    if (rows.some(row => row.kind === 'user' && row.seq > echo.seq && (echo.messageId !== undefined ? row.messageId === echo.messageId : echo.images.length === 0 && row.text === echo.text))) {
       setEcho(null)
     }
   }, [echo, busy, pendingRows, rows])
   /** The echo is hidden the moment the inbox already carries the same text
    *  (the retire effect above then drops the state) so the message never shows
    *  twice for a frame. */
-  const showEcho = echo !== null && !pendingRows.some(item => item.text === echo.text)
+  const showEcho = echo !== null && !pendingRows.some(item => echo.messageId !== undefined ? item.id === echo.messageId : echo.images.length === 0 && item.text === echo.text)
 
   const canSave = threadId !== undefined && threadHasCompletedTurn(cacheRef.current.entries)
   const trailingPending = threadId !== undefined && threadTrailingPending(cacheRef.current.entries)
@@ -989,7 +1069,7 @@ export function SideChatView(props: {
    *  already-open tab when there is one. */
   const openExistingThread = (id: string): void => {
     setMenuOpen(false)
-    if (id === threadId) return
+    if (id === threadId || busy !== null || addingImages) return
     parkSidechatReopen(id)
     ctx.get('betterSidebar')?.openTab({ type: 'sidechat' }, scope)
   }
@@ -1098,23 +1178,35 @@ export function SideChatView(props: {
 
   const handleSend = async (): Promise<void> => {
     const text = composer.trim()
-    if (text === '' || threadId === undefined || busy !== null) return
+    if ((text === '' && images.length === 0) || threadId === undefined || busy !== null || addingImagesRef.current) return
+    const submittedComposer = composer
+    const submittedImages = images
     setBusy('sending')
     setError(null)
     // Local echo: the host accepts a message into the child's inbox and only
     // LOGS it when a step claims it, so between those moments the message used
     // to be invisible ("sent, nothing happened"). The bubble shows at once and
     // is retired once the inbox or the log carries the message.
-    setEcho({ text, seq: cacheRef.current.entries.at(-1)?.event.seq ?? 0 })
+    setEcho({ text, images: submittedImages, seq: cacheRef.current.entries.at(-1)?.event.seq ?? 0 })
     try {
-      await api.sidechatPrompt(threadId, text)
-      setComposer('')
+      const content: PromptContentPart[] | undefined = submittedImages.length === 0 ? undefined
+        : [...(text === '' ? [] : [{ type: 'text' as const, text }]), ...await Promise.all(submittedImages.map(image => sidechatImagePart(image.file)))]
+      const accepted = await api.sidechatPrompt(threadId, text, content)
+      setEcho(previous => previous === null ? null : { ...previous, messageId: accepted.messageId })
+      // A bridge insertion or typing while the request is in flight is a NEW draft.
+      setComposer(previous => {
+        if (previous === submittedComposer) return ''
+        const prefix = `${submittedComposer}\n\n`
+        return submittedComposer !== '' && previous.startsWith(prefix) ? previous.slice(prefix.length) : previous
+      })
+      setImages(previous => previous.filter(image => !submittedImages.includes(image)))
       const field = composerRef.current
       if (field !== null) field.style.height = ''
       void fetchThread(threadId)
       void fetchInfo(threadId)
     } catch (cause) {
-      // Nothing reached the host: drop the echo and say why.
+      // Admission/transport failed: retain the exact draft for retry. A lost
+      // response can be uncertain, so never automatically repeat the send.
       setEcho(null)
       setError(cause instanceof Error ? cause.message : String(cause))
     } finally {
@@ -1252,14 +1344,15 @@ export function SideChatView(props: {
             clickable at all (see use-markdown-surface), scoped to this
             transcript so nothing outside it is claimed. */}
         <MarkdownDelegateProvider openFile={openChatFile}>
-          {rows.map(row => renderRow(row, rowLabels, rewriteChatText))}
+          {rows.map(row => renderRow(row, rowLabels, rewriteChatText, threadId))}
           {/* The unclaimed inbox: accepted messages whose claim has not logged
               them yet. The same bubble surface (and markdown pass) as a
               durable user row, plus the state word and the dequeue button. */}
           {pendingRows.map(item => (
             <div key={`pending:${item.id}`} className={css.sidechatPending}>
+              <HistoryImages threadId={threadId} images={item.images} />
               <div className={css.sidechatPendingText}>
-                <MarkdownText {...markdownTextProps(rewriteChatText(item.text), rowLabels)} />
+                {item.text !== '' && <MarkdownText {...markdownTextProps(rewriteChatText(item.text), rowLabels)} />}
               </div>
               <div className={css.sidechatPendingMeta}>
                 <StateDot state="ongoing" size={8} />
@@ -1279,8 +1372,9 @@ export function SideChatView(props: {
           {/* The local echo: in flight until the host reports it pending. */}
           {showEcho && echo !== null && (
             <div className={css.sidechatPending}>
+              {echo.images.length > 0 && <div className={css.sidechatImages}>{echo.images.map(image => <img key={image.id} className={css.sidechatImage} src={image.url} alt={image.file.name || t('sideChatImage')} />)}</div>}
               <div className={css.sidechatPendingText}>
-                <MarkdownText {...markdownTextProps(rewriteChatText(echo.text), rowLabels)} />
+                {echo.text !== '' && <MarkdownText {...markdownTextProps(rewriteChatText(echo.text), rowLabels)} />}
               </div>
               <div className={css.sidechatPendingMeta}>
                 <StateDot state="ongoing" size={8} />
@@ -1306,6 +1400,17 @@ export function SideChatView(props: {
       {saved && <div className={css.sidechatHint}>{t('sideChatSaved')}</div>}
       {error !== null && <div className={css.sidechatError}>{t('sideChatError', { message: error })}</div>}
       <div className={css.sidechatComposer}>
+        <input ref={fileInputRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden onChange={event => {
+          const files = Array.from(event.currentTarget.files ?? [])
+          event.currentTarget.value = ''
+          void addImages(files)
+        }} />
+        {images.length > 0 && <div className={css.sidechatImages} aria-label={t('sideChatImages')}>
+          {images.map(image => <div key={image.id} className={css.sidechatDraftImage}>
+            <img className={css.sidechatImage} src={image.url} alt={image.file.name || t('sideChatImage')} />
+            <button type="button" className={css.sidechatRemoveImage} disabled={busy !== null || addingImages} aria-label={t('sideChatRemoveImage', { name: image.file.name })} onClick={() => setImages(previous => previous.filter(item => item.id !== image.id))}><IconCloseFillRegular size={12} /></button>
+          </div>)}
+        </div>}
         <textarea
           ref={composerRef}
           className={css.sidechatComposerInput}
@@ -1315,6 +1420,13 @@ export function SideChatView(props: {
           onChange={event => {
             setComposer(event.target.value)
             growComposer()
+          }}
+          onPaste={event => {
+            const files = Array.from(event.clipboardData.files).filter(file => file.type.startsWith('image/'))
+            if (files.length === 0) return
+            // Mixed text + image pastes retain normal text insertion as well.
+            if (event.clipboardData.getData('text/plain') === '') event.preventDefault()
+            void addImages(files)
           }}
           onKeyDown={event => {
             if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return
@@ -1329,6 +1441,11 @@ export function SideChatView(props: {
               a hover bubble (ComposerTip) so its meaning is readable without
               leaving the input. */}
           <div className={css.sidechatComposerTools}>
+            <ComposerTip label={t('sideChatAttachImages')}>
+              <button type="button" className={css.sidechatIconBtn} disabled={busy !== null || addingImages} aria-label={t('sideChatAttachImages')} onClick={() => fileInputRef.current?.click()}>
+                <IconBrowseOutlineRegular size={16} />
+              </button>
+            </ComposerTip>
             <ComposerTip label={t('sideChatNew')}>
               <button
                 type="button"
@@ -1431,7 +1548,7 @@ export function SideChatView(props: {
                 type="button"
                 className={css.sidechatSendBtn}
                 onClick={() => void handleSend()}
-                disabled={composer.trim() === '' || busy !== null}
+                disabled={(composer.trim() === '' && images.length === 0) || busy !== null || addingImages}
                 aria-label={t('sideChatSend')}
               >
                 <IconSendOutlineRegular size={16} />
