@@ -1,6 +1,6 @@
 # dsh-better-sidebar
 
-> **LHG 定制版 0.28.1-lhg.2**：本 fork 增加 LHG Utils「加入到侧边对话」联动与侧聊图片输入。安装/更新请使用本仓库 Git 地址 `https://github.com/davidLi17/DSH-better-sidebar.git#main`，不要使用下面上游文档中的 npm `latest`。两个插件仍独立安装；本仓库已包含构建产物，不需要安装时运行构建脚本。DSH 需 0.2.1-rc.1 或兼容版本。
+> **LHG 定制版 0.28.1-lhg.3**：本 fork 增加 LHG Utils「加入到侧边对话」联动与侧聊图片输入。安装/更新请使用本仓库 Git 地址 `https://github.com/davidLi17/DSH-better-sidebar.git#main`，不要使用下面上游文档中的 npm `latest`。两个插件仍独立安装；本仓库已包含构建产物，不需要安装时运行构建脚本。DSH 需 0.2.1-rc.1 或兼容版本。
 
 
 <div align="center">

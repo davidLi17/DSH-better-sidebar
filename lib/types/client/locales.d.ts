@@ -456,6 +456,8 @@ export declare const zh: {
     sideChatCancelTitle: string;
     sideChatError: string;
     sideChatTurnUsage: string;
+    sideChatDeliverables: string;
+    sideChatDeliverableOpen: string;
     sideChatBlockCollapse: string;
     sideChatBlockCollapseAria: string;
     sideChatBlockExpand: string;

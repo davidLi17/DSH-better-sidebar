@@ -1,3 +1,7 @@
+## 0.28.1-lhg.3 (LHG fork)
+
+Selectively port upstream PR #1044 side-chat local Markdown images, present delivery cards and stable Markdown labels; port PR #1041 post-pan card-click fix and pointer-frame batching only. Preserve LHG image input/history, selected-text drafts and PR #1035. Keep committed build/type artifacts and no install-time scripts. See docs/plans/2026-10-24-lhg-selective-maintenance.md for provenance and validation.
+
 # Changelog
 
 > Full release history of dsh-better-sidebar (see the [README](README.md) for the latest release; also mirrored on [GitHub Releases](https://github.com/omdsh-dev/DSH-better-sidebar/releases)).

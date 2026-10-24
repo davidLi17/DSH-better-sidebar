@@ -1309,3 +1309,8 @@ This handoff is separate from “add to main conversation” and one-shot side a
 `sidechat.imageLimits` 返回宿主部署配置。只有上述两条图片接纳路由按宿主图片总字节限制扩展 JSON 预算，其他 API 仍保持 1 MiB 上限。队列和历史均保留原生图片引用；`sidechat.image` 只按当前线程自有日志或待接纳队列查找图片，然后调用原生 `readImage()`，不会读取客户端任意指定的附件引用、路径或 URL。模型是否支持视觉仍由实际选用的模型决定，失败信息会显示在转录中。
 
 图片缩略图、移除按钮及占位文本全部使用 `--dsw-alias-*` 与 `--dsw-font-*` 主题令牌，不引入自定义颜色。
+
+
+### LHG side-chat delivery cards (0.28.1-lhg.3)
+
+Side-chat `present` delivery cards use the same theme tokens as the host: surface, border, text, typography and spacing remain token-based. File buttons preserve accessible descriptions; image thumbnails use the session-scoped media route. This adds no service API or theme override.

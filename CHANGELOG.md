@@ -2,6 +2,13 @@
 
 > 本文档收录 dsh-better-sidebar 的完整发布历史（最新版摘要见 [README](README_ZH.md)；同步发布于 [GitHub Releases](https://github.com/omdsh-dev/DSH-better-sidebar/releases)）。
 
+### v0.28.1-lhg.3 (LHG fork, 2026-10-24)
+
+- Selectively port upstream dev PR #1044: local Markdown images in side-chat responses, `present` delivery cards with failure/event-order handling, and stable Markdown labels/streaming parsing. Preserve LHG native image selection/paste/history and same-thread selected-text draft handoff.
+- Selectively port PR #1041: clear stale drag travel before card clicks; batch task-canvas, floating-window and popover pointer updates per animation frame. Do not import new folding preferences or task-model changes.
+- Keep the PR #1035 model-switch/compacted-inheritance fix, existing DSH baseline, dependency lockfile, and committed `lib`/type artifacts. No install-time build scripts.
+- Exact provenance and local verification: [maintenance record](docs/plans/2026-10-24-lhg-selective-maintenance.md).
+
 ### v0.28.0
 
 - **正式版支持线前移到 DSH 0.2.1-rc.1+**：13 条 DSH peer 下限统一为 `^0.2.1-rc.1`，开发依赖、CI 与安装脚本使用精确 RC 基线。不新增运行时兼容层、不改功能实现。
