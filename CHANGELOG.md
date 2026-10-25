@@ -2,6 +2,12 @@
 
 > 本文档收录 dsh-better-sidebar 的完整发布历史（最新版摘要见 [README](README_ZH.md)；同步发布于 [GitHub Releases](https://github.com/omdsh-dev/DSH-better-sidebar/releases)）。
 
+### v0.28.1-lhg.4 (LHG fork, 2026-10-25)
+
+- Selectively absorb upstream dev PR #1050: stop hidden file-tree loading and batch its reactivation refresh, reuse unchanged Side Chat prose rewrites, and avoid the redundant response-body read on bundle HEAD requests.
+- Preserve LHG side-chat attachment input/history, draft append/focus bridge, and current-workspace link resolution. No host, permission, dependency, or context-prompt changes.
+- This is a selective fork backport, not an upstream stable release or a full merge of PR #1050.
+
 ### v0.28.1-lhg.3 (LHG fork, 2026-10-24)
 
 - Selectively port upstream dev PR #1044: local Markdown images in side-chat responses, `present` delivery cards with failure/event-order handling, and stable Markdown labels/streaming parsing. Preserve LHG native image selection/paste/history and same-thread selected-text draft handoff.

@@ -510,7 +510,7 @@ function HistoryImages({ threadId, images }: { threadId: string; images?: ImageA
 interface RowSurface {
   /** The row's prose pass: local image destinations become session media URLs
    *  first, then the surface's local-link pass runs (see the view's wiring). */
-  rewrite: (text: string) => string
+  rewrite: (row: Extract<SidechatTranscriptRow, { text: string }>) => string
   /** Open one delivered file through the plugin's own open path. */
   openFile: (path: string) => void
   /** The session-scoped media URL of one image deliverable. */
@@ -529,13 +529,13 @@ function renderRow(row: SidechatTranscriptRow, labels: RowLabels, surface: RowSu
       return (
         <div key={`${row.kind}:${row.seq}`} className={css.sidechatUser}>
           <HistoryImages threadId={threadId} images={row.images} />
-          {row.text !== '' && <MarkdownText {...markdownTextProps(surface.rewrite(row.text), labels)} />}
+          {row.text !== '' && <MarkdownText {...markdownTextProps(surface.rewrite(row), labels)} />}
         </div>
       )
     case 'assistant':
       return (
         <div key={`${row.kind}:${row.seq}`} className={css.sidechatAssistant}>
-          <MarkdownText {...markdownTextProps(surface.rewrite(row.text), labels)} streaming={!row.settled} />
+          <MarkdownText {...markdownTextProps(surface.rewrite(row), labels)} streaming={!row.settled} />
         </div>
       )
     case 'reasoning':
@@ -774,6 +774,34 @@ export function SideChatView(props: {
     ),
     [rewriteChatLinks, scope],
   )
+  /** The media URL base the rewrite bakes into image destinations. */
+  const transportBase = hostTransportBase()
+  /**
+   * The row-level prose pass, memoized by ROW OBJECT: the transcript reuses an
+   * unchanged row's object across updates (`sidechat-transcript.ts`), so a
+   * composer keystroke or a streaming push must not re-run two regex passes
+   * over every unchanged row's text. The cache is rebuilt when the inputs the
+   * pass resolves against change (session, cwd, transport base); the row's own
+   * text is compared too, so a row mutated in place never serves a stale
+   * rewrite.
+   */
+  const rewriteCache = useMemo(() => {
+    // The cache is keyed by rows, but its RESULTS were resolved against the
+    // session cwd and the transport base, so it must not outlive either. The
+    // reads below make the dependency real to the hook linter (the repo's
+    // `void wantedKey` idiom).
+    void scope.sessionId
+    void scope.cwd
+    void transportBase
+    return new WeakMap<object, { text: string; out: string }>()
+  }, [scope.sessionId, scope.cwd, transportBase])
+  const rewriteRow = useCallback((row: Extract<SidechatTranscriptRow, { text: string }>): string => {
+    const cached = rewriteCache.get(row)
+    if (cached !== undefined && cached.text === row.text) return cached.out
+    const out = rewriteChatText(row.text)
+    rewriteCache.set(row, { text: row.text, out })
+    return out
+  }, [rewriteCache, rewriteChatText])
   /** Open one delivered file: the plugin's own editor path, session-scoped
    *  like every other open in this view (a relative path resolves against the
    *  session cwd). */
@@ -793,12 +821,12 @@ export function SideChatView(props: {
   const deliverableTitlePath = useCallback((path: string): string => resolveSidebarPath(scope.cwd, path), [scope.cwd])
   const rowSurface = useMemo<RowSurface>(
     () => ({
-      rewrite: rewriteChatText,
+      rewrite: rewriteRow,
       openFile: openDeliveredFile,
       media: deliverableMediaUrl,
       resolvePath: deliverableTitlePath,
     }),
-    [rewriteChatText, openDeliveredFile, deliverableMediaUrl, deliverableTitlePath],
+    [rewriteRow, openDeliveredFile, deliverableMediaUrl, deliverableTitlePath],
   )
   const transcriptRef = useCallback((element: HTMLDivElement | null) => {
     scrollRef.current = element

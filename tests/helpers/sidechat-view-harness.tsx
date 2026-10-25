@@ -101,6 +101,7 @@ export interface SidechatHarness {
   host: SidechatHost
   /** Render the real SideChatView bound to thread 't1' under session 'root'. */
   mount: (scopeCwd?: string) => RenderedRoot
+  rerenderScope: (sessionId: string, cwd: string) => void
   /** Flush React work + the stub's resolved promises (default two rounds). */
   flush: (rounds?: number) => Promise<void>
   /** Type into the composer the way a user does (React's value tracker must
@@ -185,6 +186,9 @@ export function installSidechatHarness(overrides: Partial<SidechatWire> = {}): S
     mount: (scopeCwd = props.scope.cwd) => {
       mounted = renderRoot(createElement(SideChatView, { ...props, scope: { ...props.scope, cwd: scopeCwd } }))
       return mounted
+    },
+    rerenderScope: (sessionId, cwd) => {
+      mounted?.rerender(createElement(SideChatView, { ...props, scope: { sessionId, cwd } }))
     },
     flush: async (rounds = 2) => {
       for (let round = 0; round < rounds; round += 1) await act(async () => {})

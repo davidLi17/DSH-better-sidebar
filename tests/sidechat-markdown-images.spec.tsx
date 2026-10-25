@@ -113,6 +113,22 @@ describe('SideChatView local markdown images (C1)', () => {
     view.unmount()
   })
 
+  it('invalidates cached prose when cwd or session changes', async () => {
+    const view = harness.mount()
+    await harness.flush()
+    expect(localImage(view.container, '/p/cat.png')).toBeDefined()
+    harness.rerenderScope('root', '/other')
+    await harness.flush()
+    expect(localImage(view.container, '/p/cat.png')).toBeUndefined()
+    const moved = localImage(view.container, '/other/cat.png')
+    expect(moved).toBeDefined()
+    expect(srcUrl(moved!).searchParams.get('cwd')).toBe('/other')
+    harness.rerenderScope('other-session', '/other')
+    await harness.flush()
+    expect(srcUrl(localImage(view.container, '/other/cat.png')!).searchParams.get('sessionId')).toBe('other-session')
+    view.unmount()
+  })
+
   it('leaves code regions and remote destinations alone', async () => {
     const view = harness.mount()
     await harness.flush()
