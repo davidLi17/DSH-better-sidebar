@@ -1,6 +1,6 @@
 {
   "name": "dsh-better-sidebar",
-  "version": "0.28.1-lhg.4",
+  "version": "0.28.1-lhg.5",
   "description": "Better Sidebar for DSH — file tree, editor, changes, tasks and side chat in one column, separate for every conversation. Also exposes a service other plugins use to register sidebar tabs and file viewers.",
   "type": "module",
   "repository": {
@@ -73,19 +73,20 @@
     "locale/*.json"
   ],
   "scripts": {
-    "build": "node -e \"require('node:fs').rmSync('lib',{recursive:true,force:true})\" && tsc -p tsconfig.build.json && tsdown",
+    "build": "node scripts/build-mermaid-frame-asset.mjs && node -e \"require('node:fs').rmSync('lib',{recursive:true,force:true})\" && tsc -p tsconfig.build.json && tsdown",
     "prepublishOnly": "pnpm build",
-    "typecheck": "tsc --noEmit",
-    "bundle": "tsdown",
-    "watch": "tsdown --watch",
-    "test": "vitest run",
-    "test:windows": "vitest run --maxWorkers=1",
+    "typecheck": "node scripts/build-mermaid-frame-asset.mjs && tsc --noEmit",
+    "bundle": "node scripts/build-mermaid-frame-asset.mjs && tsdown",
+    "watch": "node scripts/build-mermaid-frame-asset.mjs && tsdown --watch",
+    "test": "node scripts/build-mermaid-frame-asset.mjs && vitest run",
+    "test:windows": "node scripts/build-mermaid-frame-asset.mjs && vitest run --maxWorkers=1",
     "test:mount": "bash scripts/e2e-mount.sh",
     "test:mount:aggregate": "bash scripts/e2e-aggregate-mount.sh",
     "clean": "node -e \"require('node:fs').rmSync('lib',{recursive:true,force:true})\"",
     "check:consumer-types": "bash scripts/check-consumer-types.sh",
     "check:engines": "node --experimental-strip-types scripts/win-engine-check.mjs --assert",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "build:asset": "node scripts/build-mermaid-frame-asset.mjs"
   },
   "license": "MIT",
   "peerDependencies": {

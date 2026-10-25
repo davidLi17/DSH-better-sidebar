@@ -302,9 +302,22 @@ function isLocalDestination(pathPart: string): boolean {
 }
 
 /**
+ * A local path as a MARKDOWN destination. Markdown treats a backslash before
+ * ASCII punctuation as an escape, so `C:\ws\_analysis\r.md` parses to
+ * `C:\ws_analysis\r.md` — one separator gone, and the file cannot be found
+ * (issue #1037). Emitting forward slashes keeps every separator, and Windows
+ * accepts both spellings for the real open. A UNC prefix stays untouched:
+ * `\\server\share` must not become the scheme-relative `//server/share`.
+ */
+function markdownPathOf(path: string): string {
+  if (path.startsWith('\\\\')) return path
+  return path.replace(/\\/g, '/')
+}
+
+/**
  * Rewrite ONE destination for the host renderer (see the module comment).
- * Idempotent: an already-rewritten `%23` destination, a line destination and a
- * fragment-less link all come back untouched.
+ * Idempotent: path separators normalize once; an already-rewritten `%23`
+ * fragment and the host's line-fragment grammar are preserved.
  */
 function rewriteDestination(destination: string, docPath: string | undefined, cwd: string | undefined): string {
   const separator = separatorOf(destination)
@@ -316,16 +329,19 @@ function rewriteDestination(destination: string, docPath: string | undefined, cw
     // so the surface's delegate never offers an action it would not serve.
     if (!isLocalDestination(pathPart)) return destination
     const rest = separator === null ? '' : destination.slice(separator.at)
-    return `${pathPart}?${rest}`
+    return `${markdownPathOf(pathPart)}?${rest}`
   }
-  // Claimed. Nothing to carry without a fragment, `%23` is already ours, and a
-  // line destination belongs to the host's own grammar.
-  if (separator === null || separator.length === ENCODED_HASH.length) return destination
-  if (isHostLineFragment(fragment)) return destination
+  // Claimed. Nothing to carry without a fragment; `%23` is already ours, but
+  // its path may still be an authored Windows spelling that needs normalizing.
+  if (separator === null) return markdownPathOf(pathPart)
+  if (separator.length === ENCODED_HASH.length) return `${markdownPathOf(pathPart)}${destination.slice(separator.at)}`
+  // A line destination belongs to the host's own grammar, but its PATH still
+  // needs the slash normalization (#1037).
+  if (isHostLineFragment(fragment)) return `${markdownPathOf(pathPart)}${destination.slice(separator.at)}`
   // A `?` inside the fragment must be encoded too: the host refuses a
   // destination that carries a query (it looks for the `?` before decoding),
   // so an unencoded one would turn the link back into plain text.
-  return `${pathPart}${ENCODED_HASH}${fragment.replace(/\?/g, '%3F')}`
+  return `${markdownPathOf(pathPart)}${ENCODED_HASH}${fragment.replace(/\?/g, '%3F')}`
 }
 
 /**

@@ -178,6 +178,68 @@ describe('rewriteLocalMarkdownLinks', () => {
     expect(rewriteLocalMarkdownLinks('[x](./other.md)', DOC, CWD)).toBe('[x](./other.md)')
   })
 
+  it('normalizes Windows backslashes so markdown cannot eat a separator (#1037)', () => {
+    // `\_` is a markdown escape: a link to `C:\ws\_analysis\r.md` used to reach
+    // the host as `C:\ws_analysis\r.md`, one separator short, and the open
+    // failed with ENOENT. Forward slashes survive the parse and Windows accepts
+    // them for the real open.
+    expect(rewriteLocalMarkdownLinks('[x](C:\\ws\\_analysis\\r.md)', DOC, CWD))
+      .toBe('[x](C:/ws/_analysis/r.md)')
+    expect(rewriteLocalMarkdownLinks('[x](C:\\ws\\_a\\r.md#标题)', DOC, CWD))
+      .toBe('[x](C:/ws/_a/r.md%23标题)')
+    // A line fragment keeps the host grammar; only the path is normalized.
+    expect(rewriteLocalMarkdownLinks('[x](C:\\ws\\_a\\r.md#L10)', DOC, CWD))
+      .toBe('[x](C:/ws/_a/r.md#L10)')
+    // Relative Windows spellings are normalized the same way.
+    expect(rewriteLocalMarkdownLinks('[x](../src\\_a\\b.md)', DOC, CWD))
+      .toBe('[x](../src/_a/b.md)')
+    // Remote links stay byte-identical, and a UNC prefix keeps its `\\` (it must
+    // not become the scheme-relative `//host/share`).
+    expect(rewriteLocalMarkdownLinks('[x](https://e.com/a_b)', DOC, CWD)).toBe('[x](https://e.com/a_b)')
+    expect(rewriteLocalMarkdownLinks('[x](\\\\srv\\share\\a_b.md)', DOC, CWD)).toBe('[x](\\\\srv\\share\\a_b.md)')
+    // Idempotent: an already-normalized destination survives another pass.
+    const once = rewriteLocalMarkdownLinks('[x](C:\\ws\\_a\\r.md)', DOC, CWD)
+    expect(rewriteLocalMarkdownLinks(once, DOC, CWD)).toBe(once)
+  })
+
+  it.each(['_analysis', '.hidden', '-draft', '!notes', '[notes]'])(
+    'preserves a Windows separator before punctuation in %s',
+    (directory) => {
+      const path = `C:\\ws\\${directory}\\r.md`
+      const normalized = `C:/ws/${directory}/r.md`
+      for (const fragment of ['', '#标题', '%23标题', '#L10-L12']) {
+        const input = `[x](${path}${fragment})`
+        const expected = `[x](${normalized}${fragment === '#标题' ? '%23标题' : fragment})`
+        const rewritten = rewriteLocalMarkdownLinks(input, DOC, CWD)
+        expect(rewritten).toBe(expected)
+        expect(rewriteLocalMarkdownLinks(rewritten, DOC, CWD)).toBe(rewritten)
+      }
+    },
+  )
+
+  it('normalizes encoded-anchor reference paths without re-encoding their fragments', () => {
+    const input = '[id]: <C:\\ws\\_a\\a b.md%23标题%3F详情>'
+    const expected = '[id]: <C:/ws/_a/a b.md%23标题%3F详情>'
+    expect(rewriteLocalMarkdownLinks(input, DOC, CWD)).toBe(expected)
+    expect(rewriteLocalMarkdownLinks(expected, DOC, CWD)).toBe(expected)
+    expect(fileTarget('C:/ws/_a/a b.md%23标题%3F详情')).toEqual({
+      path: 'C:\\ws\\_a\\a b.md', fragment: '标题?详情',
+    })
+  })
+
+  it('preserves UNC roots instead of turning them into remote scheme-relative URLs', () => {
+    const path = '\\\\srv\\share\\_analysis\\r.md'
+    for (const fragment of ['', '#标题', '%23标题', '#L10']) {
+      const expectedFragment = fragment === '#标题' ? '%23标题' : fragment
+      const rewritten = rewriteLocalMarkdownLinks(`[x](${path}${fragment})`, DOC, CWD)
+      expect(rewritten).toBe(`[x](${path}${expectedFragment})`)
+      expect(rewriteLocalMarkdownLinks(rewritten, DOC, CWD)).toBe(rewritten)
+      expect(fileTarget(`${path}${expectedFragment}`).path).toBe(path)
+    }
+    const remote = '[x](//srv/share/_analysis/r.md#标题)'
+    expect(rewriteLocalMarkdownLinks(remote, DOC, CWD)).toBe(remote)
+  })
+
   it('keeps every destination the plugin does not claim inert', () => {
     // `parseFileLink` refuses a destination carrying a query, so the appended
     // `?` is what stops a non-markdown local path from becoming a file-mention

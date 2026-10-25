@@ -1,5 +1,14 @@
 # Changelog
 
+
+### v0.28.1-lhg.5
+
+- 选择性吸收上游尚未合并的 PR #1040 / #1055 / #1053，保留 LHG 草稿追加、文本图片、旁问会话和今早 #1050 性能修复。
+- 大 Markdown 的 Mermaid 图表改在不含同源权限的沙箱 iframe 内测量，按可见性逐张调度，滚动时后台任务让位；隐藏预览暂停，恢复后继续。坏图只影响自身，不禁用后续好图；渲染通信校验来源，超时和失败可恢复。
+- Windows 本地 Markdown 链接的反斜杠统一为正斜杠，避免标点前的分隔符被 Markdown 吃掉；补齐已编码 `%23` 锚点分支，远程链接和 UNC 前缀保持原有语义。
+- 宿主右栏展开时，会话头仍显示底部工作台开关；空白会话 fixed 兜底入口的避让规则不变。
+- 继续随 Git 源交付预构建 lib，不添加安装生命周期脚本、不发布 npm 或安装包。来源、修正和验证见 [维护记录](docs/plans/2026-10-25-lhg-three-sidebar-fixes.md)。
+
 > 本文档收录 dsh-better-sidebar 的完整发布历史（最新版摘要见 [README](README_ZH.md)；同步发布于 [GitHub Releases](https://github.com/omdsh-dev/DSH-better-sidebar/releases)）。
 
 ### v0.28.1-lhg.4 (LHG fork, 2026-10-25)
