@@ -504,9 +504,11 @@ describe('git destructive operations (scratch repository)', () => {
 describe('session cwd resolution over the API route', () => {
   interface CtxOverrides {
     workingDirectory?: { readonly defaultDirectory?: string; get: (session: { header: { cwd?: string } }) => string }
-    sessionQuery?: { observeSession: (id: string, options: { projectionMode: 'all' }) => Promise<{ header: { cwd?: string }; projections?: { values: { workingDirectory?: string | null } }; [Symbol.dispose](): void }> }
     sessions?: { get: (id: string) => { header: { cwd?: string } } | undefined }
-    sessionPersistence?: { open: (id: string, access: 'read' | 'write') => Promise<{ header: { cwd?: string }; read: () => Promise<{ events: never[] }>; close: () => Promise<void> }> }
+    sessionPersistence?: {
+      open?: (id: string, access: 'read' | 'write') => Promise<{ header: { cwd?: string }; read: () => Promise<{ events: never[] }>; close: () => Promise<void> }>
+      stat?: (id: string) => Promise<{ header: { cwd?: string } } | undefined>
+    }
   }
 
   const mountAll = (overrides: CtxOverrides = {}): SidebarWebRoute[] => {
@@ -528,6 +530,7 @@ describe('session cwd resolution over the API route', () => {
       on: () => () => {},
       // No jobs/agents services in the smoke context: the routes degrade.
       get: (key: string) => overrides[key as keyof CtxOverrides],
+      logger: { info: () => {}, warn: () => {}, debug: () => {}, error: () => {} },
     }
     apply(ctx as never)
     return routes
@@ -793,54 +796,141 @@ describe('session cwd resolution over the API route', () => {
     }
   })
 
-  it('uses cold observation working-directory projections before stale client/header hints and releases every lease', async () => {
-    let current = resolvePath('/cold-execution-first')
-    let releases = 0
-    const route = mount({ sessionQuery: {
-      observeSession: async (id, options) => {
-        expect(id).toBe('wd-cold')
-        expect(options).toEqual({ projectionMode: 'all' })
-        return {
-          header: { cwd: resolvePath('/original-project') },
-          projections: { values: { workingDirectory: current } },
-          [Symbol.dispose]: () => { releases += 1 },
-        }
-      },
-    } })
-    expect(await invoke(route, 'session.cwd', { sessionId: 'wd-cold', cwd: '/stale-client' })).toMatchObject({ ok: true, value: { cwd: current } })
-    current = resolvePath('/cold-execution-second')
-    expect(await invoke(route, 'session.cwd', { sessionId: 'wd-cold', cwd: '/stale-client' })).toMatchObject({ ok: true, value: { cwd: current } })
-    expect(releases).toBe(2)
+  it('roots a detached session at its stored header cwd (the workspace address) before a stale client hint', async () => {
+    const reads: string[] = []
+    const route = mount({ sessionPersistence: { stat: async (id) => {
+      reads.push(id)
+      return { header: { cwd: resolvePath('/stored-workspace') } }
+    } } })
+    expect(await invoke(route, 'session.cwd', { sessionId: 'wd-stored', cwd: '/stale-client' })).toMatchObject({
+      ok: true, value: { cwd: resolvePath('/stored-workspace') },
+    })
+    expect(reads).toEqual(['wd-stored'])
   })
 
-  it('shares one cold observation between concurrent same-session cwd calls', async () => {
+  it('memoizes the stored header so later asks never read it again', async () => {
     let reads = 0
-    let releases = 0
+    const route = mount({ sessionPersistence: { stat: async () => {
+      reads += 1
+      return { header: { cwd: resolvePath('/stored-memo') } }
+    } } })
+    expect(await invoke(route, 'session.cwd', { sessionId: 'wd-memo' })).toMatchObject({ ok: true, value: { cwd: resolvePath('/stored-memo') } })
+    expect(await invoke(route, 'session.cwd', { sessionId: 'wd-memo' })).toMatchObject({ ok: true, value: { cwd: resolvePath('/stored-memo') } })
+    // A session header is immutable: one read answers every later ask.
+    expect(reads).toBe(1)
+  })
+
+  it('shares one stored-header read between concurrent same-session cwd calls', async () => {
+    let reads = 0
     let unblock!: () => void
     const gate = new Promise<void>((resolve) => { unblock = resolve })
-    const shared = resolvePath('/cold-shared-execution')
-    const route = mount({ sessionQuery: {
-      observeSession: async () => {
-        reads += 1
-        await gate
-        return {
-          header: { cwd: resolvePath('/original-project') },
-          projections: { values: { workingDirectory: shared } },
-          [Symbol.dispose]: () => { releases += 1 },
-        }
-      },
-    } })
-    // A session switch fires the twelve routes at once; every one needs cwd.
+    const shared = resolvePath('/stored-shared')
+    const route = mount({ sessionPersistence: { stat: async () => {
+      reads += 1
+      await gate
+      return { header: { cwd: shared } }
+    } } })
+    // A cold burst (a session switch, or one watch socket's reconcile) fires
+    // many asks at once; every one must not cost its own header read.
     const calls = Array.from({ length: 12 }, () =>
       invoke(route, 'session.cwd', { sessionId: 'wd-shared', cwd: '/stale-client' }))
     await Promise.resolve()
     unblock()
     const results = await Promise.all(calls)
-    expect(reads, 'concurrent same-key asks must share ONE cold read').toBe(1)
-    expect(releases, 'the shared observation is released once').toBe(1)
+    expect(reads, 'concurrent same-session asks must share ONE header read').toBe(1)
     for (const result of results) {
       expect(result).toMatchObject({ ok: true, value: { cwd: shared } })
     }
+  })
+
+  it('falls back to the client hint when the host cannot stat the session', async () => {
+    const absent = mount()
+    expect(await invoke(absent, 'session.cwd', { sessionId: 'wd-no-stat', cwd: '/tmp/hint-absent' })).toMatchObject({
+      ok: true, value: { cwd: resolvePath('/tmp/hint-absent') },
+    })
+    const failing = mount({ sessionPersistence: { stat: async () => { throw new Error('stored artifact unreadable') } } })
+    expect(await invoke(failing, 'session.cwd', { sessionId: 'wd-stat-error', cwd: '/tmp/hint-failing' })).toMatchObject({
+      ok: true, value: { cwd: resolvePath('/tmp/hint-failing') },
+    })
+  })
+
+  it('shares one header across API reads and raw write routes in the same cold burst', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'sidebar-cold-burst-'))
+    writeFileSync(join(root, 'read.txt'), 'read me')
+    let reads = 0
+    const open = vi.fn(async () => { throw new Error('unexpected full log read') })
+    const route = mount({ sessionPersistence: {
+      stat: async () => { reads += 1; await Promise.resolve(); return { header: { cwd: root } } }, open,
+    } })
+    try {
+      const results = await Promise.all(Array.from({ length: 12 }, (_, i) => {
+        const method = i % 3 === 0 ? 'session.cwd' : i % 3 === 1 ? 'fs.read' : 'fs.write'
+        return invoke(route, method, { sessionId: 'cross-route-burst', cwd: root,
+          path: join(root, method === 'fs.read' ? 'read.txt' : `write-${i}.txt`), content: `write ${i}` })
+      }))
+      for (const result of results) expect(result.ok).toBe(true)
+      expect(reads).toBe(1)
+      expect(open).not.toHaveBeenCalled()
+    } finally { removeTree(root) }
+  })
+
+  it('isolates identical session ids belonging to different persistence stores', async () => {
+    const a = mount({ sessionPersistence: { stat: async () => ({ header: { cwd: resolvePath('/store-a') } }) } })
+    const b = mount({ sessionPersistence: { stat: async () => ({ header: { cwd: resolvePath('/store-b') } }) } })
+    const results = await Promise.all([a, b].map(route => invoke(route, 'session.cwd', { sessionId: 'same-id' })))
+    expect(results[0]).toMatchObject({ ok: true, value: { cwd: resolvePath('/store-a') } })
+    expect(results[1]).toMatchObject({ ok: true, value: { cwd: resolvePath('/store-b') } })
+  })
+
+  it('adopts a live directory when attach completes during a pending header read', async () => {
+    const state: { live?: { header: { cwd: string } } } = {}
+    let finish!: () => void
+    const gate = new Promise<void>(resolve => { finish = resolve })
+    const route = mount({
+      sessions: { get: () => state.live },
+      workingDirectory: { get: () => resolvePath('/attached-worktree') },
+      sessionPersistence: { stat: async () => { await gate; return { header: { cwd: resolvePath('/original-project') } } } },
+    })
+    const result = invoke(route, 'session.cwd', { sessionId: 'attach-race' })
+    await Promise.resolve()
+    state.live = { header: { cwd: resolvePath('/original-project') } }
+    finish()
+    expect(await result).toMatchObject({ ok: true, value: { cwd: resolvePath('/attached-worktree') } })
+  })
+
+  it('keeps explicit worktree save targets unchanged while detached relative paths use the header root', async () => {
+    const scratch = mkdtempSync(join(tmpdir(), 'sidebar-cold-save-'))
+    const original = join(scratch, 'original')
+    const worktree = join(scratch, 'linked')
+    mkdirSync(original)
+    mkdirSync(worktree)
+    writeFileSync(join(original, 'same.txt'), 'original')
+    writeFileSync(join(worktree, 'same.txt'), 'worktree')
+    let reads = 0
+    const open = vi.fn(async () => { throw new Error('must never decode the cold log') })
+    const route = mount({ sessionPersistence: {
+      stat: async () => { reads += 1; return { header: { cwd: original } } }, open,
+    } })
+    try {
+      expect(await invoke(route, 'fs.write', { sessionId: 'save-detached', cwd: worktree, path: join(worktree, 'same.txt'), content: 'edited worktree' })).toMatchObject({ ok: true })
+      expect(readFileSync(join(original, 'same.txt'), 'utf8')).toBe('original')
+      expect(readFileSync(join(worktree, 'same.txt'), 'utf8')).toBe('edited worktree')
+      expect(await invoke(route, 'fs.write', { sessionId: 'save-detached', cwd: original, path: 'same.txt', content: 'edited original' })).toMatchObject({ ok: true })
+      expect(readFileSync(join(original, 'same.txt'), 'utf8')).toBe('edited original')
+      expect(readFileSync(join(worktree, 'same.txt'), 'utf8')).toBe('edited worktree')
+      expect(reads).toBe(1)
+      expect(open).not.toHaveBeenCalled()
+    } finally { removeTree(scratch) }
+  })
+
+  it('uses the configured host default before a stale client hint when stat is absent', async () => {
+    const route = mount({ workingDirectory: {
+      defaultDirectory: resolvePath('/host-default-without-stat'),
+      get: () => { throw new Error('not attached') },
+    } })
+    expect(await invoke(route, 'session.cwd', { sessionId: 'old-host-default', cwd: '/stale-hint' })).toMatchObject({
+      ok: true, value: { cwd: resolvePath('/host-default-without-stat') },
+    })
   })
 
   it('does not share a resolution across different client cwd hints', async () => {
@@ -855,14 +945,12 @@ describe('session cwd resolution over the API route', () => {
 
   it('does not share a cold resolution across different sessions with the same hint', async () => {
     const reads: string[] = []
-    let releases = 0
-    const route = mount({ sessionQuery: {
-      observeSession: async (id) => {
+    const route = mount({ sessionPersistence: {
+      stat: async (id) => {
         reads.push(id)
         await Promise.resolve()
         return {
           header: { cwd: resolvePath(`/cold-${id}`) },
-          [Symbol.dispose]: () => { releases += 1 },
         }
       },
     } })
@@ -871,26 +959,23 @@ describe('session cwd resolution over the API route', () => {
       invoke(route, 'session.cwd', { sessionId: 'session-b', cwd: '/same-hint' }),
     ])
     expect(reads).toEqual(['session-a', 'session-b'])
-    expect(releases).toBe(2)
     expect(first).toMatchObject({ ok: true, value: { cwd: resolvePath('/cold-session-a') } })
     expect(second).toMatchObject({ ok: true, value: { cwd: resolvePath('/cold-session-b') } })
   })
 
   it('clears a failed shared cold resolution so the next request retries', async () => {
     let reads = 0
-    let releases = 0
     let unblock!: () => void
     const gate = new Promise<void>((resolve) => { unblock = resolve })
     const recovered = resolvePath('/cold-recovered')
-    const route = mount({ sessionQuery: {
-      observeSession: async () => {
+    const route = mount({ sessionPersistence: {
+      stat: async () => {
         reads += 1
         const attempt = reads
         await gate
         if (attempt === 1) throw new Error('temporary cold read failure')
         return {
           header: { cwd: recovered },
-          [Symbol.dispose]: () => { releases += 1 },
         }
       },
     } })
@@ -901,40 +986,32 @@ describe('session cwd resolution over the API route', () => {
     const failed = await Promise.all(calls)
     expect(reads).toBe(1)
     for (const result of failed) {
-      expect(result).toMatchObject({ ok: false, error: { message: 'temporary cold read failure' } })
+      expect(result).toMatchObject({ ok: true, value: { cwd: resolvePath('/stale-client') } })
     }
     expect(await invoke(route, 'session.cwd', payload)).toMatchObject({ ok: true, value: { cwd: recovered } })
     expect(reads).toBe(2)
-    expect(releases).toBe(1)
   })
 
-  it('uses the host custom default for a null cold working-directory projection before a stale client hint', async () => {
+  it('uses the host custom default when the stored header carries no cwd', async () => {
     const defaultDirectory = resolvePath('/configured-execution-default')
-    let releases = 0
     const route = mount({
-      workingDirectory: { defaultDirectory, get: () => { throw new Error('cold reads must not call get without a live session') } },
-      sessionQuery: { observeSession: async () => ({
-        header: {}, projections: { values: { workingDirectory: null } },
-        [Symbol.dispose]: () => { releases += 1 },
-      }) },
+      workingDirectory: { defaultDirectory, get: () => { throw new Error('a detached session must not call get') } },
+      sessionPersistence: { stat: async () => ({ header: {} }) },
     })
-    expect(await invoke(route, 'session.cwd', { sessionId: 'wd-cold-default', cwd: '/stale-client' })).toMatchObject({ ok: true, value: { cwd: defaultDirectory } })
-    expect(releases).toBe(1)
+    expect(await invoke(route, 'session.cwd', { sessionId: 'wd-cold-default', cwd: '/stale-client' })).toMatchObject({
+      ok: true, value: { cwd: defaultDirectory },
+    })
   })
 
-  it('releases the cold observation lease when the working-directory projection cannot be read', async () => {
-    let releases = 0
-    const route = mount({ sessionQuery: {
-      observeSession: async () => ({
-        header: { cwd: resolvePath('/original-project') },
-        get projections(): never { throw new Error('working-directory projection failed') },
-        [Symbol.dispose]: () => { releases += 1 },
-      }),
-    } })
-    expect(await invoke(route, 'session.cwd', { sessionId: 'wd-projection-failure', cwd: '/stale-client' })).toMatchObject({
-      ok: false, error: { message: 'working-directory projection failed' },
+  it('keeps the live committed directory ahead of the stored header', async () => {
+    const route = mount({
+      sessions: { get: () => ({ header: { cwd: resolvePath('/original-project') } }) },
+      workingDirectory: { get: () => resolvePath('/committed-execution') },
+      sessionPersistence: { stat: async () => { throw new Error('a live session must not be statted') } },
     })
-    expect(releases).toBe(1)
+    expect(await invoke(route, 'session.cwd', { sessionId: 'wd-live-committed', cwd: '/stale-client' })).toMatchObject({
+      ok: true, value: { cwd: resolvePath('/committed-execution') },
+    })
   })
 
   it('does not mask failed authoritative working-directory reads with stale header or client hints', async () => {
@@ -944,12 +1021,6 @@ describe('session cwd resolution over the API route', () => {
     })
     expect(await invoke(live, 'session.cwd', { sessionId: 'wd-live-error', cwd: '/stale-client' })).toMatchObject({
       ok: false, error: { message: 'working-directory service failed' },
-    })
-    const cold = mount({ sessionQuery: {
-      observeSession: async () => { throw new Error('working-directory observation failed') },
-    } })
-    expect(await invoke(cold, 'session.cwd', { sessionId: 'wd-cold-error', cwd: '/stale-client' })).toMatchObject({
-      ok: false, error: { message: 'working-directory observation failed' },
     })
   })
 
@@ -1000,20 +1071,16 @@ describe('session cwd resolution over the API route', () => {
     }
   })
 
-  it('resolves a cold (detached) session cwd through the persistence index', async () => {
+  it('resolves a cold (detached) session cwd from its stored header', async () => {
     // Regression: a detached first request (session not yet attached, no
-    // client cwd) must resolve the cwd from the session-persistence index
+    // client cwd) must resolve the cwd from the session-persistence header
     // instead of the host process cwd. On Windows the host process cwd is
     // the DSH source root (dsh.cmd's `pushd`), so every user-project path
     // was misclassified as "outside workspace" by the realpath guard.
     const coldCwd = resolvePath('/cold-project-cwd')
     const route = mount({
       sessionPersistence: {
-        open: async (id) => ({
-          header: id === 's-cold' ? { cwd: coldCwd } : {},
-          read: async () => ({ events: [] }),
-          close: async () => {},
-        }),
+        stat: async (id) => ({ header: id === 's-cold' ? { cwd: coldCwd } : {} }),
       },
     })
     const result = await invoke(route, 'session.cwd', { sessionId: 's-cold' })
@@ -1021,14 +1088,14 @@ describe('session cwd resolution over the API route', () => {
     expect(result.value?.cwd).toBe(coldCwd)
   })
 
-  it('rejects a relative cwd from the persistence index', async () => {
+  it('rejects a relative cwd from the stored header', async () => {
     // A buggy / corrupt persistence layer that stored a relative cwd must
     // be rejected by requireAbsolute instead of flowing into the workspace
     // guard, where it would be resolved against the host process cwd and
     // potentially recreate the original "outside workspace" misclassification.
     const route = mount({
       sessionPersistence: {
-        open: async () => ({ header: { cwd: 'relative/path' }, read: async () => ({ events: [] }), close: async () => {} }),
+        stat: async () => ({ header: { cwd: 'relative/path' } }),
       },
     })
     const result = await invoke(route, 'session.cwd', { sessionId: 's-bad' })
@@ -1036,10 +1103,10 @@ describe('session cwd resolution over the API route', () => {
     expect(result.error?.message).toMatch(/invalid working directory/)
   })
 
-  it('falls back to the process cwd when persistence has no cwd for the session', async () => {
+  it('falls back to the process cwd when the stored header has no cwd for the session', async () => {
     const route = mount({
       sessionPersistence: {
-        open: async () => ({ header: {}, read: async () => ({ events: [] }), close: async () => {} }),
+        stat: async () => ({ header: {} }),
       },
     })
     const result = await invoke(route, 'session.cwd', { sessionId: 's-blank' })

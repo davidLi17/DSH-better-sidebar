@@ -132,6 +132,39 @@ describe('active worktree root', () => {
     }
   })
 
+  it('never falls back to a cold log if the session detaches during the git probe', async () => {
+    const root = realpathSync.native(mkdtempSync(join(tmpdir(), 'dsh-detach-probe-')))
+    const state = { attached: true }
+    const open = vi.fn(async () => { throw new Error('cold log must not be read') })
+    seam.responder = () => { state.attached = false; return root }
+    const ctx = {
+      sessions: { get: () => state.attached ? { header: { cwd: root }, snapshotEvents: () => [] } : undefined },
+      get: (key: string) => key === 'sessionPersistence' ? { open } : undefined,
+    } as never
+    try {
+      await expect(activeWorktreeRootOf(ctx, 'detach-during-probe', root)).resolves.toBe(root)
+      expect(open).not.toHaveBeenCalled()
+    } finally { seam.responder = null; removeTree(root) }
+  })
+
+  it('answers a detached session with its base and never reads the stored log', async () => {
+    // A detached session has no live events; folding the STORED log would decode
+    // the whole artifact for a follow-the-agent nicety the workspace address
+    // already answers. The guard must return before any persistence read or git
+    // probe — this is what removes the startup read storm.
+    const opened: string[] = []
+    probed.length = 0
+    const ctx = {
+      sessions: { get: () => undefined },
+      get: (key: string) => key === 'sessionPersistence'
+        ? { open: async (id: string) => { opened.push(id); throw new Error('a detached session must not be read') } }
+        : undefined,
+    } as never
+    await expect(activeWorktreeRootOf(ctx, 's-detached', '/tmp/workspace-address')).resolves.toBe('/tmp/workspace-address')
+    expect(opened, 'no persistence read for a detached session').toEqual([])
+    expect(probed, 'no git probe once the base is the answer').toEqual([])
+  })
+
   it('probes the REAL path, never its case-folded identity (Linux is case-sensitive)', async () => {
     // `addActivePath` keys candidates by a lowercased identity; probing that
     // KEY instead of the path silently drops every candidate whose path has an

@@ -22,8 +22,10 @@
  * Resolutions are cached process-wide ({@link ACTIVE_ROOT_TTL_MS}), concurrent
  * callers share one in-flight resolution AND one in-flight base probe, and
  * every cache is bounded — so the client's periodic re-ask, the debounced
- * fs-watch frames and the twelve route handlers that funnel through
- * `cwdOf()` are answered without a process spawn after the first scan.
+ * fs-watch frames and the route handlers that funnel through `cwdOf()` are
+ * answered without a process spawn after the first scan. A DETACHED session is
+ * answered with its base (the workspace address) and never folds the stored
+ * log — see {@link activeWorktreeRootOf}.
  */
 import { stat } from 'node:fs/promises'
 import { dirname, isAbsolute, join, sep } from 'node:path'
@@ -350,6 +352,8 @@ async function activeRootFromEvents(events: readonly SidebarSessionEvent[], base
 /** The session's live event log, or the persisted one while it is detached. */
 async function sessionEventsOf(ctx: Context, sessionId: string): Promise<readonly SidebarSessionEvent[]> {
   const live = ctx.sessions.get(sessionId)
+  // The session can detach while the preceding git probe is pending.
+  if (live === undefined) return []
   // Session-store fakes in tests (and some embedders) expose only the header;
   // a missing snapshot must degrade to the persisted log, never throw.
   const events = typeof live?.snapshotEvents === 'function' ? live.snapshotEvents() : undefined
@@ -374,6 +378,11 @@ export async function activeWorktreeRootOf(ctx: Context, sessionId: string, base
   if (base === '') return base
   const override = (process.env[ACTIVE_ROOT_OVERRIDE_ENV] ?? '').trim()
   if (override !== '' && isAbsolute(override)) return requireAbsolute(override)
+  // A detached session has no live event log, and folding its STORED one means
+  // decoding the whole artifact (39 MB here) for a follow-the-agent nicety the
+  // workspace address already answers: while cold, the session's header cwd IS
+  // the root. Attaching the session re-enables the fold on the next ask.
+  if (ctx.sessions.get(sessionId) === undefined) return base
   // The comparison is on the raw base, so a session whose caller switched base
   // (a committed working_directory change) never reuses the other
   // one's root.
