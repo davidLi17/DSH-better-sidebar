@@ -337,6 +337,8 @@ interface SidebarSettingsRenderProps {
 
 ### 4.2 `TabComponentProps`（你的页面组件收到的 props）
 
+`scope` 在同一已挂载组件实例内按 `sessionId` / `cwd` 记忆化；目录展开、语言与注册表重渲染不会无故换对象。原生页签和 shell 的徽标、右侧动作、`+` 菜单及生命周期回调也复用各自的稳定 scope。不要跨不同组件实例比较身份，也不要把对象变化当作文件刷新事件；需要刷新时用显式信号，会话/cwd 改变仍会换对象。
+
 ```ts
 interface TabComponentProps {
   ctx: Context                 // client cordis context

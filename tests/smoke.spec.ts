@@ -264,13 +264,21 @@ describe('host plugin smoke', () => {
   })
 
   it('enriches the log (full hash + refs) and renders commit diffs', async () => {
-    const cwd = process.cwd()
-    const log = await git.log(cwd)
-    const first = log[0]!
-    expect(first.hashFull).toMatch(/^[0-9a-f]{40}$/)
-    expect(typeof first.refs).toBe('string')
-    const patch = await git.commitDiff(cwd, first.hashFull)
-    expect(patch).toContain('diff --git')
+    // The fork ships prebuilt bundles: its latest commit can legitimately
+    // exceed git's production 8 MiB output cap. Exercise real git against a
+    // bounded fixture, not whatever size the current release happens to be.
+    const cwd = makeNestedScratchRepo()
+    try {
+      const log = await git.log(cwd)
+      const first = log[0]!
+      expect(first.hashFull).toMatch(/^[0-9a-f]{40}$/)
+      expect(first.refs).toContain('main')
+      const patch = await git.commitDiff(cwd, first.hashFull)
+      expect(patch).toContain('diff --git a/README.md b/README.md')
+      expect(patch).toContain('+root-v1')
+    } finally {
+      removeTree(cwd)
+    }
   })
 
   it('pages the log lazily with skip/count', async () => {
@@ -803,6 +811,101 @@ describe('session cwd resolution over the API route', () => {
     current = resolvePath('/cold-execution-second')
     expect(await invoke(route, 'session.cwd', { sessionId: 'wd-cold', cwd: '/stale-client' })).toMatchObject({ ok: true, value: { cwd: current } })
     expect(releases).toBe(2)
+  })
+
+  it('shares one cold observation between concurrent same-session cwd calls', async () => {
+    let reads = 0
+    let releases = 0
+    let unblock!: () => void
+    const gate = new Promise<void>((resolve) => { unblock = resolve })
+    const shared = resolvePath('/cold-shared-execution')
+    const route = mount({ sessionQuery: {
+      observeSession: async () => {
+        reads += 1
+        await gate
+        return {
+          header: { cwd: resolvePath('/original-project') },
+          projections: { values: { workingDirectory: shared } },
+          [Symbol.dispose]: () => { releases += 1 },
+        }
+      },
+    } })
+    // A session switch fires the twelve routes at once; every one needs cwd.
+    const calls = Array.from({ length: 12 }, () =>
+      invoke(route, 'session.cwd', { sessionId: 'wd-shared', cwd: '/stale-client' }))
+    await Promise.resolve()
+    unblock()
+    const results = await Promise.all(calls)
+    expect(reads, 'concurrent same-key asks must share ONE cold read').toBe(1)
+    expect(releases, 'the shared observation is released once').toBe(1)
+    for (const result of results) {
+      expect(result).toMatchObject({ ok: true, value: { cwd: shared } })
+    }
+  })
+
+  it('does not share a resolution across different client cwd hints', async () => {
+    const route = mount({})
+    const [first, second] = await Promise.all([
+      invoke(route, 'session.cwd', { sessionId: 'wd-hints', cwd: resolvePath('/hint-a') }),
+      invoke(route, 'session.cwd', { sessionId: 'wd-hints', cwd: resolvePath('/hint-b') }),
+    ])
+    expect(first).toMatchObject({ ok: true, value: { cwd: resolvePath('/hint-a') } })
+    expect(second).toMatchObject({ ok: true, value: { cwd: resolvePath('/hint-b') } })
+  })
+
+  it('does not share a cold resolution across different sessions with the same hint', async () => {
+    const reads: string[] = []
+    let releases = 0
+    const route = mount({ sessionQuery: {
+      observeSession: async (id) => {
+        reads.push(id)
+        await Promise.resolve()
+        return {
+          header: { cwd: resolvePath(`/cold-${id}`) },
+          [Symbol.dispose]: () => { releases += 1 },
+        }
+      },
+    } })
+    const [first, second] = await Promise.all([
+      invoke(route, 'session.cwd', { sessionId: 'session-a', cwd: '/same-hint' }),
+      invoke(route, 'session.cwd', { sessionId: 'session-b', cwd: '/same-hint' }),
+    ])
+    expect(reads).toEqual(['session-a', 'session-b'])
+    expect(releases).toBe(2)
+    expect(first).toMatchObject({ ok: true, value: { cwd: resolvePath('/cold-session-a') } })
+    expect(second).toMatchObject({ ok: true, value: { cwd: resolvePath('/cold-session-b') } })
+  })
+
+  it('clears a failed shared cold resolution so the next request retries', async () => {
+    let reads = 0
+    let releases = 0
+    let unblock!: () => void
+    const gate = new Promise<void>((resolve) => { unblock = resolve })
+    const recovered = resolvePath('/cold-recovered')
+    const route = mount({ sessionQuery: {
+      observeSession: async () => {
+        reads += 1
+        const attempt = reads
+        await gate
+        if (attempt === 1) throw new Error('temporary cold read failure')
+        return {
+          header: { cwd: recovered },
+          [Symbol.dispose]: () => { releases += 1 },
+        }
+      },
+    } })
+    const payload = { sessionId: 'wd-retry', cwd: '/stale-client' }
+    const calls = Array.from({ length: 3 }, () => invoke(route, 'session.cwd', payload))
+    await Promise.resolve()
+    unblock()
+    const failed = await Promise.all(calls)
+    expect(reads).toBe(1)
+    for (const result of failed) {
+      expect(result).toMatchObject({ ok: false, error: { message: 'temporary cold read failure' } })
+    }
+    expect(await invoke(route, 'session.cwd', payload)).toMatchObject({ ok: true, value: { cwd: recovered } })
+    expect(reads).toBe(2)
+    expect(releases).toBe(1)
   })
 
   it('uses the host custom default for a null cold working-directory projection before a stale client hint', async () => {
