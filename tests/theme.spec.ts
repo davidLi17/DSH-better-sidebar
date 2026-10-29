@@ -288,3 +288,11 @@ describe('skin contract: the plugin owns no color of its own', () => {
     }
   })
 })
+
+// The effort label must stay readable while a narrow sidebar truncates only the model.
+it('keeps sidechat effort fixed-width and lets the model name ellipsize', () => {
+  const css = readFileSync(resolve('src/client/SideChatView.module.css'), 'utf8')
+  expect(css).toMatch(/\.sidechatModelBtn\s*\{[^}]*display: flex;[^}]*max-width: 100%;/)
+  expect(css).toMatch(/\.sidechatModelName\s*\{[^}]*min-width: 0;[^}]*text-overflow: ellipsis;/)
+  expect(css).toMatch(/\.sidechatModelEffort\s*\{[^}]*flex-shrink: 0;[^}]*white-space: pre;/)
+})

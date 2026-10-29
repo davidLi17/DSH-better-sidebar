@@ -893,11 +893,23 @@ export function SideChatView(props: {
     useCallback(() => ctx.connection?.state.getSnapshot(), [ctx]),
   )
 
-  /** The agent-identity badge of the composer bar (preset · model). */
+  /** Display the host catalog's name, not a hard-coded effort vocabulary.
+   * An unset override is only "default", never a guessed effective effort. */
+  const effortLabel = useMemo(() => {
+    const model = catalogModel(catalog, info?.provider, info?.model)
+    if (model !== undefined && !model.reasoning?.efforts?.length) return undefined
+    const effort = info?.reasoningEffort
+    if (effort !== undefined) {
+      return model?.reasoning?.efforts?.find(item => item.id === effort)?.name ?? effort
+    }
+    return model?.reasoning?.efforts?.length ? t('commitModelDefaultNote') : undefined
+  }, [catalog, info])
+
+  /** The agent-identity badge of the composer bar (preset · model · effort). */
   const agentBadge = useMemo(() => {
     if (info === null) return ''
-    return [info.preset, info.model ?? info.provider].filter(Boolean).join(' · ')
-  }, [info])
+    return [info.preset, info.model ?? info.provider, effortLabel].filter(Boolean).join(' · ')
+  }, [info, effortLabel])
 
   /** Create this tab's thread (immediate-create tabs and hero retries). */
   const startThread = useCallback(async (): Promise<void> => {
@@ -1649,6 +1661,7 @@ export function SideChatView(props: {
                   aria-label={t('sideChatModel')}
                 >
                   <span className={css.sidechatModelName}>{info?.model ?? info?.provider ?? t('sideChatModel')}</span>
+                  {effortLabel !== undefined && <span className={css.sidechatModelEffort}> · {effortLabel}</span>}
                 </button>
               )}
               items={modelItems}

@@ -699,6 +699,51 @@ describe('SideChatView queue, echo and model picker', () => {
     unmount()
   })
 
+  it('shows catalog effort names and refreshes the label after each selection', async () => {
+    const efforts = [
+      { id: 'xhigh', name: 'Xhigh' },
+      { id: 'high', name: 'High' },
+      { id: 'max', name: 'Max' },
+      { id: 'ultra', name: 'Ultra (DSH parallel · xhigh)' },
+    ]
+    infoValue = { live: false, provider: 'codex', model: 'gpt-6.1-terra', reasoningEffort: 'xhigh', preset: 'ptc' }
+    catalogValue = { available: true, groups: [{ id: 'codex', models: [{ id: 'gpt-6.1-terra', reasoning: { efforts } }] }] }
+    const { container, unmount } = renderRoot(createElement(SideChatView, viewProps(makeCtx(threadStore()))))
+    await act(async () => {})
+    const trigger = container.querySelector<HTMLButtonElement>('button[aria-label="模型"]')
+    expect(trigger?.textContent).toBe('gpt-6.1-terra · Xhigh')
+    for (const effort of efforts.slice(1)) {
+      const items = await openModelMenu(container)
+      infoValue = { ...infoValue, reasoningEffort: effort.id }
+      await act(async () => { items.find(item => item.textContent === effort.name)?.click() })
+      expect(trigger?.textContent).toBe(`gpt-6.1-terra · ${effort.name}`)
+      expect(trigger?.lastElementChild?.textContent).toBe(` · ${effort.name}`)
+      expect(modelCalls.at(-1)?.reasoningEffort).toBe(effort.id)
+    }
+    unmount()
+  })
+
+  it.each([
+    [undefined, 'chat · 默认'],
+    ['unlisted', 'chat · unlisted'],
+  ])('does not guess an unset or unknown effort (%s)', async (reasoningEffort, expected) => {
+    infoValue = { live: false, provider: 'deepseek', model: 'chat', reasoningEffort }
+    catalogValue = CATALOG
+    const { container, unmount } = renderRoot(createElement(SideChatView, viewProps(makeCtx(threadStore()))))
+    await act(async () => {})
+    expect(container.querySelector('button[aria-label="模型"]')?.textContent).toBe(expected)
+    unmount()
+  })
+
+  it('does not add an effort for models without reasoning options', async () => {
+    infoValue = { live: false, provider: 'deepseek', model: 'reasoner' }
+    catalogValue = CATALOG
+    const { container, unmount } = renderRoot(createElement(SideChatView, viewProps(makeCtx(threadStore()))))
+    await act(async () => {})
+    expect(container.querySelector('button[aria-label="模型"]')?.textContent).toBe('reasoner')
+    unmount()
+  })
+
   it('offers only the inherited conversation when the host has no catalog', async () => {
     const { container, unmount } = renderRoot(createElement(SideChatView, viewProps(makeCtx(threadStore()))))
     await act(async () => {})  // flush the initial transcript pull

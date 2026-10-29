@@ -1164,6 +1164,8 @@ interface SettingsDescriptor {
 
 - **Context 诊断入口与提示**：图标沿用宿主 `Button` 与 `IconContextInjectionOutlineRegular`，标题栏为固定宽度按钮。跨会话错误通过 `shell.overlay` 展示一条可关闭提示，背景取 `--dsw-alias-bg-layer-3`、边框与图标取 `--dsw-alias-state-warn-primary`、正文取 label 令牌；宽度受视口约束，目标名与错误文案允许任意位置换行。能力中途消失时仍保留本次错误，不依赖来源弹层继续挂载。
 
+- 侧聊模型按钮显示 `模型 · 推理强度`；强度名称直接使用宿主模型目录，未显式选择时显示本地化默认说明，不推断生效档位。窄侧栏仅截断模型名，强度保持完整；配色仍沿用宿主令牌。
+
 ### 12.2 注意事项
 
 - 类名是 CSS Modules 哈希，**不是契约**；精确命中用 `[data-dsh-better-sidebar]` + 子串类名（`[class*='panel']`）或 DOM 结构。

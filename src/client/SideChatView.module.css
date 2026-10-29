@@ -52,6 +52,9 @@
  * model in full — it yields width only when the panel is genuinely too
  * narrow, and even then its label ellipsizes instead of the bar overflowing. */
 .sidechatModelBtn {
+  display: flex;
+  align-items: center;
+  max-width: 100%;
   flex: 0 1 auto;
   min-width: 0;
   padding: 1px 8px;
@@ -71,9 +74,15 @@
 
 .sidechatModelName {
   display: block;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.sidechatModelEffort {
+  flex-shrink: 0;
+  white-space: pre;
 }
 
 /* ── hero (unbound tab: the one brand moment) ───────────────────────── */
