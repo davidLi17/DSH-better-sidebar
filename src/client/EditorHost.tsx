@@ -30,7 +30,7 @@ import type { Context } from '../context-types.ts'
 import { api, mediaUrl, type SessionScope } from './api.ts'
 import { BinaryDownload } from './binary-download.tsx'
 import { planFirstMatch, planFsReadOutcome, type EditorLoadAction } from './editor-load.ts'
-import { clearEditorDirty, setEditorDirty } from './editor-dirty.ts'
+import { clearEditorDirty, isEditorDirty, setEditorDirty } from './editor-dirty.ts'
 import { baseName } from './FileTree.tsx'
 import { createFrameBatcher } from './frame-batcher.ts'
 import { openClaimedNativeFile, openSidebarFile } from './sidebar-file.ts'
@@ -232,6 +232,14 @@ export function EditorHost(props: {
   const openFile = (absolute: string): void => {
     if (inPlace) {
       if (!openClaimedNativeFile(ctx, scope.sessionId, scope.cwd, absolute)) {
+        // Switching paths remounts the viewer and discards its draft. Use the
+        // same session-scoped registry as tab close, before updating the tab.
+        if (absolute !== path && isEditorDirty(tab.id, scope.sessionId)) {
+          const confirmed = typeof window.confirm === 'function'
+            ? window.confirm(t('switchUnsavedConfirm'))
+            : false
+          if (!confirmed) return
+        }
         ctx.get('betterSidebar')?.updateTab(tab.id, { path: absolute, title: baseName(absolute) }, scope.sessionId)
       }
     } else {

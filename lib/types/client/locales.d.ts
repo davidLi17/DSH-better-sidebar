@@ -168,6 +168,7 @@ export declare const zh: {
     refresh: string;
     refreshUnsavedConfirm: string;
     closeUnsavedConfirm: string;
+    switchUnsavedConfirm: string;
     save: string;
     saved: string;
     unsaved: string;
