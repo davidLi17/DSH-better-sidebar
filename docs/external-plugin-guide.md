@@ -1320,3 +1320,16 @@ This handoff is separate from “add to main conversation” and one-shot side a
 ### LHG side-chat delivery cards (0.28.1-lhg.3)
 
 Side-chat `present` delivery cards use the same theme tokens as the host: surface, border, text, typography and spacing remain token-based. File buttons preserve accessible descriptions; image thumbnails use the session-scoped media route. This adds no service API or theme override.
+
+### Optional Side Chat assistant decoration (LHG fork)
+
+`registerSidechatAssistantDecorator(id, Component)` returns a disposer. Components receive
+`{ parentSessionId, threadId, seq, children }`; `children` is the original assistant answer
+Markdown. Only visible answer rows are decorated, not reasoning, injected context, user
+messages, or tools. Hidden views remove the wrapper and its portals/listeners. Identity
+changes remount the wrapper. Use `parentSessionId` for main-composer actions and a separate
+source key such as `JSON.stringify(['sidechat', threadId, seq])` for quote navigation.
+`getSidechatAssistantDecorators()` is a stable snapshot until registration/disposal;
+`subscribe()` reports changes. Register via an optional Cordis `betterSidebar` injection
+and dispose with that scope; capability-check this method for older Sidebar versions.
+Do not resolve sidechat citation links against the main chat transcript.

@@ -614,10 +614,22 @@ export interface SidebarSurface {
   has(tabId: string, sessionId?: string): boolean
 }
 
+/** Optional decoration of visible assistant answer text, never reasoning or tool rows.
+ * parentSessionId owns the main composer; threadId owns the sidechat source. */
+export interface SidechatAssistantProps {
+  parentSessionId: string
+  threadId: string
+  seq: number
+  children: ReactNode
+}
+export type SidechatAssistantDecorator = (props: SidechatAssistantProps) => ReactNode
+
 /**
  * The registry service published as `ctx.betterSidebar`.
  */
 export interface BetterSidebarService {
+  registerSidechatAssistantDecorator(id: string, decorator: SidechatAssistantDecorator): () => void
+  getSidechatAssistantDecorators(): readonly SidechatAssistantDecorator[]
   /** Reveal this session's side chat and append selected text without sending.
    * Existing draft text and attachments are preserved; the caret lands at end. */
   appendSidechatDraft(input: SidechatDraftInput): void
@@ -826,7 +838,7 @@ export function matchUrlTarget(tabs: readonly TabDescriptor[], url: URL): TabDes
  * The plugin version this service instance reports. Keep in lockstep with
  * `package.json`'s version — `tests/service.spec.ts` asserts the pair.
  */
-export const SIDEBAR_SERVICE_VERSION = '0.28.2-lhg.2'
+export const SIDEBAR_SERVICE_VERSION = '0.28.2-lhg.4'
 
 /**
  * Monotonic capability list consumers use to gate new API usage (features
@@ -870,6 +882,7 @@ export const SIDEBAR_FEATURES = [
   'settingPatterns',
   'hostRouteUrl',
   'appendSidechatDraft',
+  'sidechatAssistantDecorator',
 ] as const
 
 /** Run one plugin callback; a throw is logged and never breaks the caller. */
@@ -887,6 +900,8 @@ function safeCall(fn: () => void): void {
  * to the store's reducer. One instance per client plugin activation.
  */
 export function createBetterSidebarService(store: SidebarStore): BetterSidebarService {
+  const decorators = new Map<string, SidechatAssistantDecorator>()
+  let decoratorSnapshot: readonly SidechatAssistantDecorator[] = []
   const tabs = new Map<string, TabDescriptor>()
   const viewers = new Map<string, FileViewerDescriptor>()
   const fileIcons = new Map<string, FileIconDescriptor>()
@@ -1409,6 +1424,19 @@ export function createBetterSidebarService(store: SidebarStore): BetterSidebarSe
   }
 
   return {
+    registerSidechatAssistantDecorator: (id, decorator) => {
+      if (decorators.has(id)) throw new Error(`Sidechat assistant decorator "${id}" already registered`)
+      decorators.set(id, decorator)
+      decoratorSnapshot = [...decorators.values()]
+      notify()
+      return () => {
+        if (decorators.get(id) !== decorator) return
+        decorators.delete(id)
+        decoratorSnapshot = [...decorators.values()]
+        notify()
+      }
+    },
+    getSidechatAssistantDecorators: () => decoratorSnapshot,
     appendSidechatDraft: (input: SidechatDraftInput): void => {
       if (!tabs.has('sidechat') || !isTabEnabled('sidechat')) {
         throw new Error('Side Chat is not available or is disabled')

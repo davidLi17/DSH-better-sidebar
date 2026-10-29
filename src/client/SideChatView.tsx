@@ -34,6 +34,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSyncExternalStore } from 'react'
 import clsx from 'clsx'
+import type { SidechatAssistantDecorator } from './service.ts'
 import {
   ConnectionIndicator,
   DiffBlock,
@@ -523,7 +524,7 @@ interface RowSurface {
 /** One row renderer (React keys ride the source event seq). `surface.rewrite` is the
  *  surface's markdown link pass — the rows are model prose, so a relative link
  *  resolves against the session cwd (see use-markdown-surface). */
-function renderRow(row: SidechatTranscriptRow, labels: RowLabels, surface: RowSurface, threadId: string): React.ReactNode {
+function renderRow(row: SidechatTranscriptRow, labels: RowLabels, surface: RowSurface, threadId: string, parentSessionId: string, decorators: readonly SidechatAssistantDecorator[]): React.ReactNode {
   switch (row.kind) {
     case 'user':
       return (
@@ -535,7 +536,9 @@ function renderRow(row: SidechatTranscriptRow, labels: RowLabels, surface: RowSu
     case 'assistant':
       return (
         <div key={`${row.kind}:${row.seq}`} className={css.sidechatAssistant}>
-          <MarkdownText {...markdownTextProps(surface.rewrite(row), labels)} streaming={!row.settled} />
+          {decorators.reduceRight<React.ReactNode>((children, Decorator) => (
+            <Decorator key={JSON.stringify([parentSessionId, threadId, row.seq])} parentSessionId={parentSessionId} threadId={threadId} seq={row.seq}>{children}</Decorator>
+          ), <MarkdownText {...markdownTextProps(surface.rewrite(row), labels)} streaming={!row.settled} />)}
         </div>
       )
     case 'reasoning':
@@ -644,6 +647,9 @@ function renderRow(row: SidechatTranscriptRow, labels: RowLabels, surface: RowSu
   }
 }
 
+const NO_ASSISTANT_DECORATORS: readonly SidechatAssistantDecorator[] = []
+const noSubscribe = (): (() => void) => () => {}
+
 /** One side conversation tab (one thread per tab, Codex-style). */
 export function SideChatView(props: {
   ctx: Context
@@ -652,6 +658,11 @@ export function SideChatView(props: {
   visible: boolean
 }): React.ReactNode {
   const { ctx, scope, tab, visible } = props
+  const sidebar = ctx.get('betterSidebar')
+  const decorators = useSyncExternalStore(
+    sidebar?.subscribe ?? noSubscribe,
+    () => sidebar?.getSidechatAssistantDecorators?.() ?? NO_ASSISTANT_DECORATORS,
+  )
   const rowLabels = useMemo<RowLabels>(() => {
     // Shared Block chrome: copy buttons reuse the sidebar's copy pair, the
     // collapse/expand family is common to every Block kind.
@@ -1488,7 +1499,7 @@ export function SideChatView(props: {
             clickable at all (see use-markdown-surface), scoped to this
             transcript so nothing outside it is claimed. */}
         <MarkdownDelegateProvider openFile={openChatFile}>
-          {rows.map(row => renderRow(row, rowLabels, rowSurface, threadId))}
+          {rows.map(row => renderRow(row, rowLabels, rowSurface, threadId, scope.sessionId, visible ? decorators : NO_ASSISTANT_DECORATORS))}
           {/* The unclaimed inbox: accepted messages whose claim has not logged
               them yet. The same bubble surface (and markdown pass) as a
               durable user row, plus the state word and the dequeue button. */}

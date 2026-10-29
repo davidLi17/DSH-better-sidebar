@@ -600,10 +600,21 @@ export interface SidebarSurface {
     /** Whether a tab id belongs to the native surface (same `sessionId` rule as `update`). */
     has(tabId: string, sessionId?: string): boolean;
 }
+/** Optional decoration of visible assistant answer text, never reasoning or tool rows.
+ * parentSessionId owns the main composer; threadId owns the sidechat source. */
+export interface SidechatAssistantProps {
+    parentSessionId: string;
+    threadId: string;
+    seq: number;
+    children: ReactNode;
+}
+export type SidechatAssistantDecorator = (props: SidechatAssistantProps) => ReactNode;
 /**
  * The registry service published as `ctx.betterSidebar`.
  */
 export interface BetterSidebarService {
+    registerSidechatAssistantDecorator(id: string, decorator: SidechatAssistantDecorator): () => void;
+    getSidechatAssistantDecorators(): readonly SidechatAssistantDecorator[];
     /** Reveal this session's side chat and append selected text without sending.
      * Existing draft text and attachments are preserved; the caret lands at end. */
     appendSidechatDraft(input: SidechatDraftInput): void;
@@ -795,7 +806,7 @@ export declare function matchUrlTarget(tabs: readonly TabDescriptor[], url: URL)
  * The plugin version this service instance reports. Keep in lockstep with
  * `package.json`'s version — `tests/service.spec.ts` asserts the pair.
  */
-export declare const SIDEBAR_SERVICE_VERSION = "0.28.2-lhg.2";
+export declare const SIDEBAR_SERVICE_VERSION = "0.28.2-lhg.4";
 /**
  * Monotonic capability list consumers use to gate new API usage (features
  * are never removed). Each string names a v0.12.0+ capability:
@@ -822,7 +833,7 @@ export declare const SIDEBAR_SERVICE_VERSION = "0.28.2-lhg.2";
  * owns the right column, so the plugin keeps only its bottom workbench).
  * Consumers must not gate on it any more.
  */
-export declare const SIDEBAR_FEATURES: readonly ["badge", "tabLifecycle", "updateTab", "openFile", "targetedOpen", "stateSubscription", "tabMeta", "pluginSettings", "urlTarget", "settingSelect", "fileIcons", "rightActions", "settingPatterns", "hostRouteUrl", "appendSidechatDraft"];
+export declare const SIDEBAR_FEATURES: readonly ["badge", "tabLifecycle", "updateTab", "openFile", "targetedOpen", "stateSubscription", "tabMeta", "pluginSettings", "urlTarget", "settingSelect", "fileIcons", "rightActions", "settingPatterns", "hostRouteUrl", "appendSidechatDraft", "sidechatAssistantDecorator"];
 /**
  * Create one BetterSidebar service bound to a store. The service owns the
  * tab/viewer registries (Map + listener set) and proxies openTab/closeTab
