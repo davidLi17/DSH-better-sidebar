@@ -1,3 +1,7 @@
+## 26.10.31-lhg — Frontend dependency fixes
+
+Selectively update DOMPurify 3.4.17 and CodeMirror view/state/commands patches for HTML sanitization, input/scroll selection ordering, range mapping and bidi cursor movement. Preserve LHG draft/image handoff and host-shared dependency baselines. See docs/plans/2026-10-31-lhg-dependency-maintenance.md.
+
 ## 0.28.1-lhg.3 (LHG fork)
 
 Selectively port upstream PR #1044 side-chat local Markdown images, present delivery cards and stable Markdown labels; port PR #1041 post-pan card-click fix and pointer-frame batching only. Preserve LHG image input/history, selected-text drafts and PR #1035. Keep committed build/type artifacts and no install-time scripts. See docs/plans/2026-10-24-lhg-selective-maintenance.md for provenance and validation.

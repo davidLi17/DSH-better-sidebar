@@ -1,6 +1,6 @@
 {
   "name": "dsh-better-sidebar",
-  "version": "26.10.29-lhg",
+  "version": "26.10.31-lhg",
   "description": "Better Sidebar for DSH — file tree, editor, changes, tasks and side chat in one column, separate for every conversation. Also exposes a service other plugins use to register sidebar tabs and file viewers.",
   "type": "module",
   "repository": {
@@ -117,7 +117,7 @@
     }
   },
   "dependencies": {
-    "@codemirror/commands": "^6.10.4",
+    "@codemirror/commands": "^6.11.1",
     "@codemirror/lang-cpp": "^6.0.3",
     "@codemirror/lang-css": "^6.3.1",
     "@codemirror/lang-go": "^6.0.1",
@@ -136,15 +136,15 @@
     "@codemirror/language": "^6.12.4",
     "@codemirror/legacy-modes": "^6.5.3",
     "@codemirror/search": "^6.7.1",
-    "@codemirror/state": "^6.7.1",
-    "@codemirror/view": "^6.43.8",
+    "@codemirror/state": "^6.7.6",
+    "@codemirror/view": "^6.43.15",
     "@deepseek-ai/schemastery": "~3.18.5",
     "@formkit/auto-animate": "^0.10.0",
     "@lezer/highlight": "^1.2.3",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
     "clsx": "^2.1.1",
-    "dompurify": "^3.4.14",
+    "dompurify": "^3.4.17",
     "mermaid": "^11.16.1",
     "react-icons": "5.7.0",
     "rxjs": "^7.8.2",

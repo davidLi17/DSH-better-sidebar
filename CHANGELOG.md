@@ -1,3 +1,7 @@
+## 26.10.31-lhg — 前端依赖修复
+
+选择性升级 DOMPurify 3.4.17 与 CodeMirror view/state/commands 补丁：加强 HTML 清理，修复编辑器输入与滚动竞态、选区映射和双向文本光标移动。保留 LHG 侧聊草稿、图片及原有宿主依赖。详见 docs/plans/2026-10-31-lhg-dependency-maintenance.md。
+
 # Changelog
 
 ### v0.28.2-lhg.4 (LHG fork, 2026-10-29)
