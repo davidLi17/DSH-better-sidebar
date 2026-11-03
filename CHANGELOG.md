@@ -1,3 +1,7 @@
+## 26.11.3-lhg — 文件变动页签样式修复
+
+选择性吸收上游未合并 PR #1097：Git / 本轮文件切换标签改用插件自有样式与宿主主题 Token，不再因宿主私有 CSS 哈希变化变成无样式按钮。保留键盘导航、选中状态、预览及所有 LHG 侧聊联动。详见 docs/plans/2026-11-03-lhg-changes-tabs.md。
+
 ## 26.10.31-lhg — 前端依赖修复
 
 选择性升级 DOMPurify 3.4.17 与 CodeMirror view/state/commands 补丁：加强 HTML 清理，修复编辑器输入与滚动竞态、选区映射和双向文本光标移动。保留 LHG 侧聊草稿、图片及原有宿主依赖。详见 docs/plans/2026-10-31-lhg-dependency-maintenance.md。
