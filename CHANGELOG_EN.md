@@ -1,3 +1,7 @@
+## 26.11.4-lhg — Terminal background styling fix
+
+- Selectively absorb unmerged upstream PR #1104 (`b9ae0024afeef78b625c8069ee9fad48f281b776`): keep xterm-owned classes global and use a scoped three-class selector to beat its later black viewport background. The terminal container no longer paints a second background. Preserve Side Chat drafts, images and LHG integration.
+
 ## 26.11.3-lhg — Changes lens tabs styling fix
 
 Selectively absorb unmerged upstream PR #1097: replace private host CSS hashes with plugin-owned theme-token styles. Preserve selection, keyboard navigation, previews and LHG Side Chat integration. See docs/plans/2026-11-03-lhg-changes-tabs.md.

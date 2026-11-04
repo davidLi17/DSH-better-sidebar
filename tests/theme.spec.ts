@@ -15,6 +15,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { readFileSync, readdirSync } from 'node:fs'
 import { resolve, sep } from 'node:path'
+import { transform } from 'lightningcss'
 import { colorAlpha, effectiveTokenValue, tokenValue } from '../src/client/theme.ts'
 
 afterEach(() => {
@@ -117,6 +118,19 @@ function moduleStylesheets(): string[] {
 }
 
 describe('skin contract: the plugin owns no color of its own', () => {
+  it('keeps the terminal viewport global and more specific than late xterm CSS', () => {
+    const source = readFileSync(resolve(ROOT, 'src/client/terminal.module.css'))
+    const compiled = transform({ filename: 'terminal.module.css', code: source, cssModules: true })
+    const screen = compiled.exports!.screen!.name
+    const css = compiled.code.toString()
+    // xterm owns both classes. Its later .xterm .xterm-viewport rule must
+    // lose to the scoped three-class selector, without relying on !important.
+    expect(css).toContain(`.${screen} .xterm .xterm-viewport {\n  background: none;`)
+    expect(css).not.toMatch(/!important/)
+    expect(compiled.exports).not.toHaveProperty('xterm-viewport')
+    expect(css).toMatch(new RegExp(`\\.${screen} \\{[^}]*background: none;`))
+  })
+
   it('keeps Context diagnostics feedback themed and bounded on narrow viewports', () => {
     const source = readFileSync(resolve(ROOT, 'src/client/context-diagnostics.module.css'), 'utf8')
     expect(source).toContain('var(--dsw-alias-bg-layer-3)')

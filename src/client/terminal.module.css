@@ -26,7 +26,7 @@
   padding: 8px;
   overflow: hidden;
   color: var(--dsw-alias-label-primary);
-  background: var(--dsw-alias-bg-base);
+  background: transparent;
   font-family: var(--ds-font-family-code, monospace);
 }
 
@@ -34,8 +34,10 @@
   height: 100%;
 }
 
-.screen .xterm-viewport {
-  background: var(--dsw-alias-bg-base);
+/* xterm owns these classes. Keep them global and add the scoped screen
+   class so this wins over xterm's later two-class viewport background rule. */
+.screen :global(.xterm .xterm-viewport) {
+  background: transparent;
 }
 
 .status {

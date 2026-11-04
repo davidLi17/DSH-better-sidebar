@@ -1146,6 +1146,8 @@ interface SettingsDescriptor {
 
 ### 12.1 规则
 
+- **底部终端容器**：容器与 xterm viewport 保持透明，沿用工作台表面；xterm 自有类名必须通过 `:global()` 引用，scoped 三类选择器压过其延后加载的黑底规则。不改变终端文本、输入和主题令牌。
+
 - **Mermaid 占位**：骨架使用 `--dsw-alias-bg-layer-2`，错误详情使用标签令牌；`prefers-reduced-motion: reduce` 下停用脉冲动画。图表外壳以 `content-visibility: auto` 跳过视口外绘制，仍在变为可见后按当前主题生成经过清洗的 SVG。
 
 - **面板表面**：右/底面板背景 = `var(--dsw-alias-bg-layer-1)`。**绝不消费 `--dsw-specific-sidebar-fill`**（宿主左导航专属，皮肤按左导航语义覆盖它，面板消费会失去填充）。换面板表面 = 覆写 `--dsw-alias-bg-layer-1`。
