@@ -27,6 +27,7 @@
 import './browser-globals.ts'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { EventEmitter } from 'node:events'
+import { rm } from 'node:fs/promises'
 import {
   existsSync,
   mkdirSync,
@@ -59,7 +60,6 @@ import {
 } from '../src/archive-tools.ts'
 import { writeError } from '../src/wire.ts'
 import type { SidebarHttpResponse, SidebarWebRoute, SidebarWebUpgradeRoute } from '../src/context-types.ts'
-import { removeTree } from './temp-tree.ts'
 
 /** The OS temp directory as it was BEFORE this file points TMPDIR at a scratch dir. */
 const realTmp = tmpdir()
@@ -281,8 +281,10 @@ afterEach(async () => {
   resetArchiveToolCache()
   vi.useRealTimers()
   vi.restoreAllMocks()
-  removeTree(scratch)
-  removeTree(tempDir)
+  // Keep the event loop alive while pack() closes file handles. Synchronous
+  // rm retries block those close completions on Windows.
+  await rm(scratch, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
+  await rm(tempDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
 })
 
 /** A directory inside the per-test fixture tree (removed with it). */
@@ -481,7 +483,7 @@ describe('archive task table (injected spawn)', () => {
 
   it('caps concurrent builds at ARCHIVE_MAX_BUILDING (409)', async () => {
     expect(ARCHIVE_MAX_BUILDING).toBe(4)
-    const { tasks } = makeTable({ behavior: { run: { hang: true } } })
+    const { tasks, children } = makeTable({ behavior: { run: { hang: true } } })
     const paths = sampleSelection()
     for (let index = 0; index < ARCHIVE_MAX_BUILDING; index += 1) {
       await tasks.start({ sessionId: 's-1', name: `a${index}`, paths })
@@ -489,6 +491,9 @@ describe('archive task table (injected spawn)', () => {
     await expect(tasks.start({ sessionId: 's-1', name: 'one-too-many', paths }))
       .rejects.toMatchObject({ code: 'bad-request', status: 409 })
     expect(tasks.size()).toBe(ARCHIVE_MAX_BUILDING)
+    // start() returns before its detached file-open/spawn finishes. Ensure
+    // these intentionally hanging children exist before teardown kills them.
+    await vi.waitFor(() => { expect(children).toHaveLength(ARCHIVE_MAX_BUILDING) })
   })
 
   it('expires a settled task after ARCHIVE_TTL_MS and deletes its file', async () => {

@@ -15,3 +15,7 @@ Validation:
 - Package contains 483 files. Official DSH rc.1 installation into a fresh Web profile registered the bundle and started the Host successfully. Official Playwright browser downloads returned HTML rather than ZIP archives. The system Chromium fallback also failed at launch in this sandbox. Local browser assertions therefore did not run; the unchanged existing CI real-host mount lane remains the publication gate. No installation archive is uploaded.
 
 Upstream DSH 0.2.2 adaptation, editor backup, quote chips and wider UI changes are deferred for separate compatibility and regression validation. This maintenance does not advertise support for DSH 0.2.2.
+
+## Candidate CI follow-up
+
+Candidate b54b9dee passed Linux and the real-host Chromium lane (13 passed, 3 existing skips). Windows twice failed only archive fixture teardown with ENOTEMPTY. The concurrency-cap fixture returned before detached fake children had spawned, and synchronous removal retries blocked asynchronous file-handle closure. Wait for the four intentionally hanging fake children before teardown, and use asynchronous removal with the same retry budget. Preserve every concurrency assertion; no workflow or runtime archive behavior changes. Final CI must revalidate the resulting commit.
