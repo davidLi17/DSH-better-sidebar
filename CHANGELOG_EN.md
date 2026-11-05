@@ -1,5 +1,9 @@
 ## 26.11.4-lhg — Terminal background styling fix
 
+### LHG 26.11.5-lhg
+
+- Selectively backport upstream `45b4d42ef65ad3c54d4c14f22d1382579573a213`: remap delivery watermarks in compacted inheritance seeds and drop markers citing trimmed events, preventing unreadable new side-chat logs. Existing corrupt logs are not repaired. Retain the DSH 0.2.1 baseline and LHG customizations.
+
 - Selectively absorb unmerged upstream PR #1104 (`b9ae0024afeef78b625c8069ee9fad48f281b776`): keep xterm-owned classes global and use a scoped three-class selector to beat its later black viewport background. The terminal container no longer paints a second background. Preserve Side Chat drafts, images and LHG integration.
 
 ## 26.11.3-lhg — Changes lens tabs styling fix
