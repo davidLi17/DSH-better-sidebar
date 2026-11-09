@@ -154,15 +154,46 @@ describe('/sidebar/file streams without a size cap', () => {
     expect([...disposition].every(char => char.codePointAt(0)! <= 0xFF)).toBe(true)
   })
 
-  it('keeps the SVG sandbox headers on the streamed response', async () => {
+  it.each(['svg', 'SVG'])('keeps the SVG sandbox headers on the streamed response (%s)', async extension => {
     const ws = workspace('svg')
-    const target = join(ws, 'vector.svg')
+    const target = join(ws, `vector.${extension}`)
     writeFileSync(target, '<svg xmlns="http://www.w3.org/2000/svg"></svg>')
     const { origin } = await serve(ws)
 
     const response = await fetch(fileUrl(origin, ws, target))
     expect(response.status).toBe(200)
     expect(response.headers.get('content-security-policy')).toBe("sandbox; object-src 'none'")
+    expect(response.headers.get('x-content-type-options')).toBe('nosniff')
+    expect(response.headers.get('referrer-policy')).toBe('no-referrer')
+  })
+
+  it.each(['html', 'htm', 'HTML'])('keeps scriptable file previews in an opaque origin (%s)', async extension => {
+    const ws = workspace('opaque-preview')
+    const target = join(ws, `preview.${extension}`)
+    writeFileSync(target, '<script>window.fixture = true</script>')
+    const { origin } = await serve(ws)
+    const response = await fetch(fileUrl(origin, ws, target))
+    expect(response.status).toBe(200)
+    const policy = response.headers.get('content-security-policy') ?? ''
+    expect(policy).toContain('sandbox')
+    expect(policy).not.toContain('allow-same-origin')
+    expect(response.headers.get('x-content-type-options')).toBe('nosniff')
+    expect(response.headers.get('referrer-policy')).toBe('no-referrer')
+    expect(await response.text()).toContain('window.fixture')
+  })
+
+  it.each(['png', 'jpg', 'pdf', 'bin', 'txt', 'xhtml'])('keeps an inert preview free of the CSP sandbox (%s)', async extension => {
+    // The guard is scoped to scriptable documents: a PNG/unknown binary must
+    // not gain a sandbox directive (nothing to sandbox, and it would be a
+    // behaviour change for existing image previews). nosniff is the real
+    // protection there, and it stays on every response.
+    const ws = workspace('inert-preview')
+    const target = join(ws, `preview.${extension}`)
+    writeFileSync(target, '<script>window.fixture = true</script>')
+    const { origin } = await serve(ws)
+    const response = await fetch(fileUrl(origin, ws, target))
+    expect(response.status).toBe(200)
+    expect(response.headers.get('content-security-policy')).toBeNull()
     expect(response.headers.get('x-content-type-options')).toBe('nosniff')
     expect(response.headers.get('referrer-policy')).toBe('no-referrer')
   })

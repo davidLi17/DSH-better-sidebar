@@ -1,6 +1,6 @@
 {
   "name": "dsh-better-sidebar",
-  "version": "26.11.5-lhg",
+  "version": "26.11.9-lhg",
   "description": "Better Sidebar for DSH — file tree, editor, changes, tasks and side chat in one column, separate for every conversation. Also exposes a service other plugins use to register sidebar tabs and file viewers.",
   "type": "module",
   "repository": {
@@ -201,7 +201,7 @@
     "globals": "^17.12.0",
     "immer": "^10.1.1",
     "jsdom": "^29.1.1",
-    "katex": "^0.16.47",
+    "katex": "0.18.2",
     "lightningcss": "^1.32.0",
     "mdast-util-from-markdown": "^2.0.3",
     "mdast-util-gfm": "^3.1.0",
@@ -217,6 +217,7 @@
     "micromark-util-types": "^2.0.2",
     "react": "^18.2.0",
     "react-dom": "18.2.0",
+    "rolldown": "1.2.5",
     "shiki": "^4.3.1",
     "simple-icons": "^16.32.0",
     "tsdown": "^0.22.2",

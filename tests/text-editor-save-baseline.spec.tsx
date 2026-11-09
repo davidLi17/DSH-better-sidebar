@@ -297,3 +297,47 @@ describe('TextEditor conflict probe ordering', () => {
     expect(onReload).not.toHaveBeenCalled()
   })
 })
+
+/** A save acknowledges only the document snapshot it actually wrote. */
+describe('TextEditor in-flight save isolation (#1146)', () => {
+  it('keeps edits made while saving dirty and adopts the new disk baseline', async () => {
+    let resolve!: (result: { ok: boolean; mtimeMs: number }) => void
+    fsWrite.mockReturnValueOnce(new Promise(yes => { resolve = yes }))
+    const editor = mountEditor()
+    try {
+      type(editor.view(), '// first\n')
+      act(() => { editor.controls().save() })
+      type(editor.view(), '// newer\n')
+      await act(async () => { resolve({ ok: true, mtimeMs: 300 }) })
+      expect(editor.state()).toMatchObject({ dirty: true, saveState: 'idle' })
+      await act(async () => { editor.controls().save() })
+      expect(fsWrite.mock.calls[1]![2]).toBe('// newer\n// first\n' + CONTENT)
+      expect(fsWrite.mock.calls[1]![3]).toBe(300)
+      expect(editor.state().dirty).toBe(false)
+    } finally { editor.unmount() }
+  })
+
+  for (const outcome of ['success', 'conflict'] as const) {
+    it(`ignores an old save ${outcome} after another document load`, async () => {
+      let resolve!: (result: { ok: boolean; mtimeMs: number }) => void
+      let reject!: (reason: unknown) => void
+      fsWrite.mockReturnValueOnce(new Promise((yes, no) => { resolve = yes; reject = no }))
+      const editor = mountEditor()
+      try {
+        type(editor.view(), '// old\n')
+        act(() => { editor.controls().save() })
+        editor.rerender({ content: NEXT_CONTENT, mtimeMs: 400 })
+        await act(async () => {
+          if (outcome === 'success') resolve({ ok: true, mtimeMs: 300 })
+          else reject(new SidebarApiError('fs-conflict', 'old save conflict'))
+        })
+        expect(editor.view().state.doc.toString()).toBe(NEXT_CONTENT)
+        expect(editor.state()).toMatchObject({ dirty: false, saveState: 'idle' })
+        expect(editor.container.textContent).not.toContain('changed on disk since it was loaded')
+        await act(async () => { editor.controls().save() })
+        expect(fsWrite.mock.calls[1]![2]).toBe(NEXT_CONTENT)
+        expect(fsWrite.mock.calls[1]![3]).toBe(400)
+      } finally { editor.unmount() }
+    })
+  }
+})

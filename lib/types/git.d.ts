@@ -213,9 +213,7 @@ export declare function currentBranch(cwd: string): Promise<string>;
  * both numstat diffs: the counts only ever ride rows the status read itself
  * reports, and limiting the diffs to those paths is what keeps an unignored
  * nested `node_modules` (59 631 entries / 9.24 MB of numstat) out of the two
- * whole-repo walks. `--literal-pathspecs` is required: porcelain paths are
- * literal file names, and without it a name like `:colon.txt` is parsed as
- * pathspec magic and silently loses its counts.
+ * whole-repo walks. 两条 numstat 也要字面 pathspec，理由见 literalPathspec()。
  *
  * Each side's reading lands on its own field of the entry
  * ({@link GitStatusEntry} documents why the two are never summed).

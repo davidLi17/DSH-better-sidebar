@@ -649,7 +649,8 @@ export function TextEditor(props: FileViewerProps) {
     if (view === null || savingRef.current) return
     // The bytes this request writes: the same string becomes the baseline text
     // once the host accepts it (the draft may keep changing while in flight).
-    const text = view.state.doc.toString()
+    const sentDoc = view.state.doc
+    const text = sentDoc.toString()
     conflictProbeGeneration.current += 1
     savingRef.current = true
     setSaveState('saving')
@@ -658,23 +659,32 @@ export function TextEditor(props: FileViewerProps) {
     // instead of clobbering whatever wrote it (the model, another tab, an
     // external editor). `null` = the file did not exist when loaded.
     api.fsWrite(scope, path, text, mtimeRef.current ?? null).then((result) => {
-      conflictProbeGeneration.current += 1
       savingRef.current = false
+      if (viewRef.current !== view) return
+      conflictProbeGeneration.current += 1
       // Adopt the fresh baseline the host reports (absent on a stat failure —
       // keep the old one, the next save just re-checks).
       if (typeof result.mtimeMs === 'number') mtimeRef.current = result.mtimeMs
       savedTextRef.current = text
-      setDraft(null)
-      setDirty(false)
+      const liveDoc = view.state.doc
+      const live = liveDoc === sentDoc ? text : liveDoc.toString()
+      if (live !== text) {
+        setDraft(live)
+        setSaveState('idle')
+      } else {
+        setDraft(null)
+        setDirty(false)
+        setSaveState('saved')
+      }
       setConflict(false)
-      setSaveState('saved')
       // The saved bytes are a new revision of the uncommitted diff: re-read
       // the change set (the file's XY status code usually stays the same, so
       // the status store alone would never wake the gutter up again).
       setGitRevision(value => value + 1)
     }).catch((error: unknown) => {
-      conflictProbeGeneration.current += 1
       savingRef.current = false
+      if (viewRef.current !== view) return
+      conflictProbeGeneration.current += 1
       if (error instanceof SidebarApiError && error.code === 'fs-conflict') {
         setConflict(true)
         setSaveState('idle')

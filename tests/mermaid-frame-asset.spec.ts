@@ -18,7 +18,7 @@ describe('mermaid frame asset', () => {
     expect(MERMAID_FRAME_HTML).toContain('Promise.resolve().then(function ()')
   })
 
-  it('inlines exactly two script bodies (mermaid UMD + frame protocol)', () => {
+  it('inlines exactly two script bodies (mermaid IIFE + frame protocol)', () => {
     // Every `</script` inside the inlined sources is escaped as `<\/script`,
     // so the document carries exactly the two structural closing tags.
     expect(MERMAID_FRAME_HTML.match(/<\/script>/gi)?.length).toBe(2)

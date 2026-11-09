@@ -1146,6 +1146,8 @@ interface SettingsDescriptor {
 
 ### 12.1 规则
 
+- **选区浮动按钮**：`selectionPopup` 常态使用 `--dsw-alias-button-floating-fill`，悬停与键盘聚焦使用 `--dsw-alias-button-floating-hover`，与宿主选区引用动作同源。它浮在正文上方，不得使用半透明的菜单、面板或轻量 hover 令牌；几何和边框保持不变。
+
 - **底部终端容器**：容器与 xterm viewport 保持透明，沿用工作台表面；xterm 自有类名必须通过 `:global()` 引用，scoped 三类选择器压过其延后加载的黑底规则。不改变终端文本、输入和主题令牌。
 
 - **Mermaid 占位**：骨架使用 `--dsw-alias-bg-layer-2`，错误详情使用标签令牌；`prefers-reduced-motion: reduce` 下停用脉冲动画。图表外壳以 `content-visibility: auto` 跳过视口外绘制，仍在变为可见后按当前主题生成经过清洗的 SVG。
