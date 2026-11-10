@@ -526,10 +526,16 @@ test('plugin mounts into the DSH shell and survives a built-in tab sweep', async
   const mdRow = pane.locator(`[role="button"][title$="${SEEDED_MD_FILE}"]:visible`)
   await expect(mdRow, `the seeded "${SEEDED_MD_FILE}" file must appear in the plugin's explorer`).toHaveCount(1, { timeout: 30_000 })
   await mdRow.click({ position: { x: 8, y: 8 } })
+  // The editor intentionally keeps CodeMirror mounted (but hidden) in preview
+  // mode to preserve unsaved edits. Scope to the rendered markdown surface so
+  // the hidden source text cannot satisfy or duplicate the preview assertion.
+  const markdownPreview = pane.locator('[data-dsh-md-surface]:visible')
+  const previewTail = markdownPreview.getByText('tail text', { exact: true })
   await expect(
-    pane.getByText('tail text'),
+    previewTail,
     'the markdown preview must render the seeded document',
   ).toHaveCount(1, { timeout: 30_000 })
+  await expect(previewTail).toBeVisible()
   await mermaidChunk
   await expect(
     pane.locator('[data-mermaid-diagram] svg'),
