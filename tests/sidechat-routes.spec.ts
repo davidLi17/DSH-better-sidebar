@@ -9,6 +9,8 @@
  */
 import { describe, expect, it, vi } from 'vitest'
 import { resolve } from 'node:path'
+import { AgentModel, modelSelectionProjectionDefinition, type ModelSelectionProjectionState } from '@deepseek-ai/dsh-agent'
+import { Service } from '@deepseek-ai/cordis'
 import WorkingDirectoryService from '@deepseek-ai/dsh-working-directory'
 import { Session, SessionLogOffset, SESSION_FORMAT_VERSION } from '@deepseek-ai/dsh-session'
 import type { SessionEvent, SessionHeader, SessionId } from '@deepseek-ai/dsh-session'
@@ -35,7 +37,7 @@ function agent(id: string, over: {
     clear: vi.fn(),
     remove: vi.fn((_id: string) => true),
   }
-  return {
+  const result = {
     id,
     status: 'idle' as const,
     options: {
@@ -43,8 +45,7 @@ function agent(id: string, over: {
       model: over.model ?? 'model-x',
       ...(over.reasoningEffort !== undefined ? { reasoningEffort: over.reasoningEffort } : {}),
     },
-    // The agent-scoped context `installModelSelection` binds its prompt /
-    // request waterfalls to; the fake records the listeners' existence only.
+    // The unpublished setup scope receives the host model-switch notice.
     ctx: { on: vi.fn((_event: string, _listener: unknown) => () => {}) },
     session: {
       id,
@@ -58,6 +59,20 @@ function agent(id: string, over: {
     cancel: vi.fn(),
     inbox,
   }
+  const selections: unknown[] = []
+  const model = new AgentModel(
+    () => [...(over.events ?? []), ...selections].reduce<ModelSelectionProjectionState>(
+      (state, event) => modelSelectionProjectionDefinition.apply(state, event as never),
+      { lastUsed: null, pending: null },
+    ),
+    { append: (type: string, data: unknown) => {
+      selections.push({ type, data })
+      return result.session.append(type, data)
+    } } as never,
+    result.options as never,
+  )
+  return { ...result, model }
+
 }
 
 type AgentLike = ReturnType<typeof agent>
@@ -175,16 +190,18 @@ describe('sidechat.start', () => {
     const workingDirectory = new WorkingDirectoryService({
       reflect: { provide: () => {} },
       sessionProjections: {
-        register: (definition: DirectoryProjection) => { registered = definition },
-        stateOf: (session: { header: { cwd?: string }; snapshotEvents(): SessionEvent[] }) => {
-          if (registered === undefined) throw new Error('working-directory unit not registered')
-          return session.snapshotEvents().reduce((cwd, event) => registered!.apply(cwd, event), registered.init(session.header))
+        register: async (definition: DirectoryProjection) => {
+          registered = definition
+          return { stateOf: (session: { header: { cwd?: string }; snapshotEvents(): SessionEvent[] }) =>
+            session.snapshotEvents().reduce((cwd, event) => definition.apply(cwd, event), definition.init(session.header)),
+          }
         },
       },
       systemPrompt: { context: () => {}, getContextOrder: () => 0 },
       on: () => {},
       effect: () => {},
     } as never, {})
+    await workingDirectory[Service.init]()
     expect(workingDirectory.get(parent.session as never)).toBe(current)
     const services = happyServices(parent, agent('child'))
     await buildSidechatApi(ctxWith({ ...services, workingDirectory }))['sidechat.start']({ sessionId: 'parent' })
@@ -1009,7 +1026,7 @@ describe('sidechat.models and sidechat.model', () => {
   it('normalizes, logs and installs a selection for the live thread', async () => {
     const child = agent('child-model', { events: threadLog() })
     const services = happyServices(undefined, child)
-    const resolveCallConfig = vi.fn(async () => ({ provider: 'p2', model: 'm2', reasoningEffort: 'high' }))
+    const resolveCallConfig = vi.fn(async (selection: unknown) => selection)
     const api = buildSidechatApi(ctxWith({ ...services, llm: { resolveCallConfig } }))
     await expect(api['sidechat.model']({ childId: 'child-model', provider: 'p2', model: 'm2', reasoningEffort: 'high' }))
       .resolves.toEqual({
@@ -1022,13 +1039,38 @@ describe('sidechat.models and sidechat.model', () => {
       model: 'm2',
       reasoningEffort: 'high',
     })
-    // The selection seam is installed ONCE per agent: the second switch of the
-    // same thread only mutates the ref.
+    // Selection updates use the host-owned model and never add post-publication listeners.
+    expect(child.model.current()).toEqual({ provider: 'p2', model: 'm2', reasoningEffort: 'high' })
     const listeners = child.ctx.on.mock.calls.length
-    expect(listeners).toBeGreaterThan(0)
+    expect(listeners).toBe(0)
     await api['sidechat.model']({ childId: 'child-model', provider: 'p2', model: 'm2' })
     expect(child.session.append).toHaveBeenCalledTimes(2)
     expect(child.ctx.on.mock.calls.length).toBe(listeners)
+    expect(child.model.current()).toEqual({ provider: 'p2', model: 'm2' })
+    await api['sidechat.model']({ childId: 'child-model', provider: 'p2', model: 'm2' })
+    expect(child.session.append).toHaveBeenCalledTimes(2)
+  })
+
+
+  it('installs the model-switch notice in unpublished create and resume scopes', async () => {
+    const parent = agent('parent')
+    const child = agent('child-setup')
+    const services = happyServices(parent, child)
+    const api = buildSidechatApi(ctxWith(services))
+    await api['sidechat.start']({ sessionId: 'parent' })
+    const created = services.create.mock.calls[0]![0] as { setup: (ctx: unknown, agent: unknown) => Promise<void> }
+    await created.setup(child.ctx, child)
+    expect(child.ctx.on).toHaveBeenCalledWith('agent/pre-step', expect.any(Function), { prepend: true })
+    expect(services.mount).toHaveBeenCalledTimes(1)
+
+    services.agents.get = vi.fn(() => undefined)
+    const cold = buildSidechatApi(ctxWith(services))
+    await cold['sidechat.model']({ childId: 'child-setup', provider: 'cold', model: 'resumed' })
+    const resumed = services.resume.mock.calls[0]![0] as { setup: (ctx: unknown, agent: unknown) => Promise<void> }
+    await resumed.setup(child.ctx, child)
+    expect(child.ctx.on).toHaveBeenCalledTimes(2)
+    expect(services.mount).toHaveBeenCalledTimes(2)
+    expect(child.model.current()).toEqual({ provider: 'cold', model: 'resumed' })
   })
 
   it('rejects an unavailable model with a bad-request', async () => {

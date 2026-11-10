@@ -31,7 +31,6 @@ import {
   type Agent,
   type AgentSetup,
   type CreateAgentOptions,
-  type ModelSelectionRef,
   type ResumeAgentOptions,
 } from '@deepseek-ai/dsh-agent'
 import { snapshotSubagentDescriptor } from '@deepseek-ai/dsh-subagent'
@@ -84,25 +83,6 @@ declare module '@deepseek-ai/dsh-llm' {
   interface MessageSourceMap {
     /** Side-chat context injection (boundary prompt + parked in-progress snapshot). */
     'dsh-better-sidebar': { kind: typeof SIDE_INJECTION_SOURCE_KIND }
-  }
-}
-
-/**
- * The session-local model selection event. Its owning package
- * (`dsh-api-session-controller`) is not a plugin dependency, but the event is
- * part of the durable session format the plugin must write to change a
- * thread's model the way the host's own composer does — so the key is
- * declared here with the exact shape that package's own projection folds
- * (provider, model, optional branded effort).
- */
-declare module '@deepseek-ai/dsh-session' {
-  interface SessionEventMap {
-    /** Session-local model selection for the next request. */
-    'model/selection': {
-      provider: string
-      model: string
-      reasoningEffort?: ReasoningEffortId
-    }
   }
 }
 
@@ -170,15 +150,6 @@ const threadDisposers = new Map<string, () => Promise<void>>()
  *  prompt is then delivered alone, a logged degradation). */
 const pendingSnapshots = new Map<string, string>()
 
-/** Per-thread model-selection refs installed on the live agent. The host's
- *  own composer commits a model switch by appending `model/selection` AND
- *  installing this agent-scoped ref (`SessionController.selectForNextRequest`);
- *  the ref is what prompt assembly and request routing actually read, because
- *  the controller caches one selection object per agent and never re-reads the
- *  projection. A subagent-origin thread never passes through the controller's
- *  fence, so the plugin installs the same seam itself. */
-const threadModelRefs = new Map<string, ModelSelectionRef>()
-
 /** The host model catalog service's structural face (dsh-api-session-controller
  *  is not a plugin peer; only `modelCatalog()` is read, and its shape is
  *  mirrored by {@link SidechatModelCatalog}). */
@@ -196,21 +167,23 @@ interface SidebarLlmService {
   }): Promise<unknown>
 }
 
-/** Resolve the parent's preset and build the child's composition setup
- *  (mirror of api-proxy's composeAgent minus the model-selection install —
- *  the child carries the parent's provider/model in agentOptions). */
+/** Compose the unpublished child like the host controller: install the
+ *  model-switch notice before mounting its preset. Routing belongs to agent.model. */
 async function composeChildSetup(
   ctx: Context,
   presetId: string | undefined,
 ): Promise<{ agentPreset?: string; setup: AgentSetup }> {
   const presets = ctx.get('agentPresets') as SidebarAgentPresetsService | undefined
   if (presets === undefined) {
-    return { setup: () => Promise.resolve() }
+    return { setup: agentCtx => { installModelSelection(agentCtx) } }
   }
   const resolved = await presets.resolve(presetId)
   return {
     agentPreset: resolved.id,
-    setup: async (agentCtx: CordisContext) => { await presets.mount(agentCtx, resolved.id) },
+    setup: async (agentCtx: CordisContext) => {
+      installModelSelection(agentCtx)
+      await presets.mount(agentCtx, resolved.id)
+    },
   }
 }
 
@@ -222,16 +195,19 @@ async function composePersistedSetup(
 ): Promise<AgentSetup> {
   const persistence = ctx.get('sessionPersistence') as SidebarSessionPersistenceService | undefined
   if (persistence === undefined) {
-    return () => Promise.resolve()
+    return agentCtx => { installModelSelection(agentCtx) }
   }
   const inspected = await readPersistedSession(persistence, childId)
   const presetId = resolvePresetId(inspected.header, inspected.events)
   const presets = ctx.get('agentPresets') as SidebarAgentPresetsService | undefined
   if (presets === undefined || presetId === undefined) {
-    return () => Promise.resolve()
+    return agentCtx => { installModelSelection(agentCtx) }
   }
   const resolved = await presets.resolve(presetId)
-  return async (agentCtx: CordisContext) => { await presets.mount(agentCtx, resolved.id) }
+  return async (agentCtx: CordisContext) => {
+    installModelSelection(agentCtx)
+    await presets.mount(agentCtx, resolved.id)
+  }
 }
 
 /** One text-block prompt (the thread boundary + question, or a follow-up). */
@@ -504,26 +480,12 @@ function dropInheritedGhosts(agent: Agent): number {
   return removed
 }
 
-/** The thread's EFFECTIVE model route: what its log says it will request with
- *  (`pending ?? lastUsed` of the `model/selection` / `request/header` fold),
- *  falling back to the agent's frozen creation-time options only when the log
- *  records no selection at all. Reading `agent.options` alone ships the
- *  creation-time deployment default — the bug #368 fixed for inheritance. */
+/** The agent owns the live selection and its durable projection in DSH 0.2.2. */
 function selectionOf(agent: Agent): SidechatModelSelection | undefined {
-  const logged = effectiveModelSelection(
-    agent.session.snapshotEvents() as unknown as readonly SidechatLogEvent[],
-  )
-  if (logged !== undefined) return logged
-  const { provider, model, reasoningEffort } = agent.options
-  if (provider === undefined || model === undefined) return undefined
-  return {
-    provider,
-    model,
-    ...(reasoningEffort === undefined ? {} : { reasoningEffort: String(reasoningEffort) }),
-  }
+  return agent.model.current()
 }
 
-/** One wire selection as the agent-scoped ref's branded value. */
+/** Brand the wire choice for the host-owned AgentModel. */
 function brandedSelection(selection: SidechatModelSelection): {
   provider: string
   model: string
@@ -536,28 +498,6 @@ function brandedSelection(selection: SidechatModelSelection): {
       ? {}
       : { reasoningEffort: ReasoningEffortId(selection.reasoningEffort) }),
   }
-}
-
-/**
- * Hand the agent the model-selection seam, once per live agent: the ref prompt
- * assembly snapshots and request routing applies. Seeded from the thread's
- * recorded selection, so a resumed thread keeps the model the user picked
- * instead of reverting to the deployment default.
- * @param agent - the live thread agent.
- * @param childId - thread identity (the ref's key).
- * @returns the installed (or already installed) ref.
- */
-function ensureModelSelection(agent: Agent, childId: string): ModelSelectionRef {
-  const existing = threadModelRefs.get(childId)
-  if (existing !== undefined) return existing
-  const selection = selectionOf(agent)
-  const ref: ModelSelectionRef = {
-    current: selection === undefined ? undefined : brandedSelection(selection),
-    assembled: undefined,
-  }
-  installModelSelection(agent.ctx, ref)
-  threadModelRefs.set(childId, ref)
-  return ref
 }
 
 /** Resolve the thread's live agent, cold-resuming the persisted session under
@@ -581,7 +521,6 @@ async function ensureLiveThread(ctx: Context, childId: string): Promise<Agent> {
     // delivery — never blanket-clear, which would discard input the user
     // queued in this thread themselves.
     dropInheritedGhosts(handle.agent)
-    ensureModelSelection(handle.agent, childId)
     return handle.agent
   } catch (error) {
     throw new SidebarError(
@@ -799,10 +738,6 @@ export function buildSidechatApi(ctx: Context, live?: AssistantLiveBuffer): Side
       // See docs/plans/2026-09-13-sidechat-inbox-projection-leak.md and
       // docs/plans/2026-10-12-sidechat-native-surface.md.
       handle.agent.inbox.clear()
-      // Give the thread the same model-selection seam the host's composer
-      // installs, seeded from the parent route it just inherited, so a later
-      // per-thread switch is a ref update rather than a second install.
-      ensureModelSelection(handle.agent, childId)
       // Pin the thread label so the client can identify its threads by
       // title prefix (the rename is a live-session op, no RPC fence).
       const titles = ctx.get('sessionTitle') as SidebarSessionTitleService | undefined
@@ -900,7 +835,6 @@ export function buildSidechatApi(ctx: Context, live?: AssistantLiveBuffer): Side
     'sidechat.dispose': async (payload: unknown) => {
       const childId = requireString(payload, 'childId')
       pendingSnapshots.delete(childId)
-      threadModelRefs.delete(childId)
       const dispose = threadDisposers.get(childId)
       if (dispose !== undefined) {
         threadDisposers.delete(childId)
@@ -1005,11 +939,9 @@ export function buildSidechatApi(ctx: Context, live?: AssistantLiveBuffer): Side
       }
       const selection = await normalizeSelection(ctx, requested)
       const agent = await ensureLiveThread(ctx, childId)
-      // The host's own commit shape (`SessionController.selectForNextRequest`):
-      // the durable intent lands in the log, and the agent-scoped ref is what
-      // prompt assembly and request routing read for the NEXT step.
-      agent.session.append('model/selection', brandedSelection(selection))
-      ensureModelSelection(agent, childId).current = brandedSelection(selection)
+      // AgentModel.select records durable intent and drives the next step's
+      // projection. Do not append again or retain a stale plugin-owned ref.
+      agent.model.select(brandedSelection(selection))
       return { accepted: true as const, selection }
     },
   }

@@ -1,5 +1,4 @@
 import { type ImageAttachmentLimits, type ImageAttachmentRef } from './sidechat-images.ts';
-import { ReasoningEffortId } from '@deepseek-ai/dsh-llm';
 import type { Context } from './context-types.ts';
 import { SIDE_INJECTION_SOURCE_KIND, type SidechatLiveEvent, type SidechatLogEvent, type SidechatModelCatalog, type SidechatModelSelection, type SidechatPendingInput, type SidechatThreadInfo } from './sidechat-core.ts';
 import type { AssistantLiveBuffer } from './assistant-live.ts';
@@ -17,24 +16,6 @@ declare module '@deepseek-ai/dsh-llm' {
         /** Side-chat context injection (boundary prompt + parked in-progress snapshot). */
         'dsh-better-sidebar': {
             kind: typeof SIDE_INJECTION_SOURCE_KIND;
-        };
-    }
-}
-/**
- * The session-local model selection event. Its owning package
- * (`dsh-api-session-controller`) is not a plugin dependency, but the event is
- * part of the durable session format the plugin must write to change a
- * thread's model the way the host's own composer does — so the key is
- * declared here with the exact shape that package's own projection folds
- * (provider, model, optional branded effort).
- */
-declare module '@deepseek-ai/dsh-session' {
-    interface SessionEventMap {
-        /** Session-local model selection for the next request. */
-        'model/selection': {
-            provider: string;
-            model: string;
-            reasoningEffort?: ReasoningEffortId;
         };
     }
 }

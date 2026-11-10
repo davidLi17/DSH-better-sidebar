@@ -15,6 +15,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { IconPlusOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
 import { createRoot, type Root } from 'react-dom/client'
 import { act, Simulate } from 'react-dom/test-utils'
 import { ChangesTab, opCountOf } from '../src/client/changes/ChangesTab.tsx'
@@ -645,8 +647,10 @@ describe('ChangesTab', () => {
       const stage = iconOf(t('stage'))
       const unstage = iconOf(t('unstage'))
       expect(unstage).toContain(MINUS_GLYPH)
-      expect(unstage).not.toContain('M8 2V14')
-      expect(stage).toContain('M8 2V14')
+      const hostPlus = document.createElement('div')
+      hostPlus.innerHTML = renderToStaticMarkup(createElement(IconPlusOutlineRegular, { size: 12 }))
+      expect(stage).toBe(hostPlus.querySelector('svg')!.innerHTML)
+      expect(stage).not.toBe(unstage)
     } finally {
       act(() => { root.unmount() })
       container.remove()

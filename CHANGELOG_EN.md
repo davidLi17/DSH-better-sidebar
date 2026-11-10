@@ -1,3 +1,9 @@
+## 26.11.10-lhg — 2026-11-10
+
+- Adapt to DSH 0.2.2-rc.1 using the host-owned `agent.model` selection and unpublished create/resume setup for model-switch notices.
+- Align peer floors, development packages, installers and the CI host. Preserve LHG selected-text drafts, images, inheritance, saving and preview customizations.
+- Selectively backport upstream `de29aae2` (canonical two-byte GBK euro) and `b9d2934` (ignore zero-sized dock anchors).
+
 ## 26.11.4-lhg — Terminal background styling fix
 
 ### LHG 26.11.5-lhg

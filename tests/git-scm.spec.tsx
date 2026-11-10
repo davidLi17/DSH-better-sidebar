@@ -1,4 +1,7 @@
 /** @vitest-environment jsdom */
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { IconPlusOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
 import { act } from 'react-dom/test-utils'
 import { afterEach, expect, it, vi } from 'vitest'
 import { api, type GitStatusResult, type SessionScope } from '../src/client/api.ts'
@@ -116,6 +119,10 @@ it('keeps directory/all actions inside their group, including Merge directory fo
   const dir = (name: string): HTMLButtonElement => group(name).querySelector<HTMLButtonElement>('[data-dir="src"]')!
   const dirAction = (name: string): HTMLButtonElement => dir(name).parentElement!.querySelector<HTMLButtonElement>(`button[aria-label="${t('stageAll')}"]`)!
   try {
+    const hostPlus = document.createElement('div')
+    hostPlus.innerHTML = renderToStaticMarkup(createElement(IconPlusOutlineRegular, { size: 12 }))
+    const plusGlyphs = [...hostPlus.querySelectorAll('svg path')].map(path => path.getAttribute('d'))
+    expect(plusGlyphs).not.toEqual(['M2 8H14'])
     const rows = [...view.container.querySelectorAll('[data-row]')]
     expect(rows).toHaveLength(7)
     for (const directory of view.container.querySelectorAll('[data-dir]')) expect(directory.closest('[data-row]')!.querySelector('[data-count]')).toBeNull()
@@ -128,14 +135,14 @@ it('keeps directory/all actions inside their group, including Merge directory fo
       // unstages (the minus), every other row's stages (the host's Plus).
       const glyphs = [...action.querySelectorAll('svg path')].map(path => path.getAttribute('d'))
       const stagedRow = row.closest('[data-group]')!.getAttribute('data-group') === 'staged'
-      expect(glyphs).toEqual(stagedRow ? ['M2 8H14'] : ['M8 2V14', 'M2 8H14'])
+      expect(glyphs).toEqual(stagedRow ? ['M2 8H14'] : plusGlyphs)
     }
     for (const name of ['merge', 'staged', 'unstaged']) {
       const headerAction = group(name).firstElementChild!.querySelector<HTMLButtonElement>(`button[aria-label="${t(name === 'staged' ? 'unstageAll' : 'stageAll')}"]`)!
       expect(headerAction.querySelector('svg')!.getAttribute('width')).toBe('12')
       expect(headerAction.querySelector('svg')!.getAttribute('height')).toBe('12')
       expect([...headerAction.querySelectorAll('svg path')].map(path => path.getAttribute('d')))
-        .toEqual(name === 'staged' ? ['M2 8H14'] : ['M8 2V14', 'M2 8H14'])
+        .toEqual(name === 'staged' ? ['M2 8H14'] : plusGlyphs)
     }
     await click(dir('merge'))
     expect(dir('merge').getAttribute('aria-expanded')).toBe('false')
