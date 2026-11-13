@@ -331,6 +331,37 @@ test('plugin mounts into the DSH shell and survives a built-in tab sweep', async
     )
     .toBe(true)
 
+  // Real host-mounted composer; reject only this prompt locally so keyboard
+  // regressions do not invoke a provider. Error text may have a locale prefix.
+  const input = page.locator('textarea[class*="sidechatComposerInput"]:visible')
+  await expect(input).toBeVisible()
+  let promptAttempts = 0
+  await page.route('**/sidebar/api/sidechat.prompt', async route => {
+    promptAttempts += 1
+    await route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ ok: false, error: { code: 'test', message: 'manual retry required' } }) })
+  })
+  await input.fill('IME draft retained')
+  await input.evaluate(field => {
+    field.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))
+    field.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    field.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }))
+    field.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    field.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 229, bubbles: true, cancelable: true }))
+  })
+  await page.waitForTimeout(50)
+  expect(promptAttempts).toBe(0)
+  await input.press('Enter')
+  await expect.poll(() => promptAttempts).toBe(1)
+  await expect(page.getByText(/manual retry required/)).toBeVisible()
+  await input.evaluate(field => field.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', repeat: true, bubbles: true, cancelable: true })))
+  await page.waitForTimeout(50)
+  expect(promptAttempts).toBe(1)
+  await expect(input).toHaveValue('IME draft retained')
+  await input.press('Enter')
+  await expect.poll(() => promptAttempts).toBe(2)
+  await input.fill('')
+  await page.unroute('**/sidebar/api/sidechat.prompt')
+
   // The native tab body host is a BLOCK scroller with a definite height, not a
   // flex container, so a tab root that only declares `flex: 1` collapses to its
   // content height — exactly how the side-chat composer used to drift away from

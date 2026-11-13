@@ -1,13 +1,3 @@
-/**
- * The tab strip of one pane: tabs capped at TAB_MAX_WIDTH (ellipsized),
- * overflow scrolls horizontally, a close button per tab, a four-way split
- * button cluster, and the + menu that opens new tabs (explorer / git). Tabs
- * are draggable; dropping onto another tab inserts before it, dropping on the
- * strip background appends to this pane. Right-clicking a tab opens the tab
- * context menu (close / close others / close to the left / close to the
- * right / close all — every close scoped to this pane — plus reveal the
- * right-clicked tab's file in the OS file manager).
- */
 import { type ReactNode } from 'react';
 import type { SidebarTab } from './state.ts';
 /** One + menu option. */

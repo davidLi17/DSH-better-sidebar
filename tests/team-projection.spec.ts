@@ -133,3 +133,34 @@ describe('teamMembersOf', () => {
     expect(teamMembersOf(team(), live, {})[0]?.status).toBe('idle')
   })
 })
+
+describe('rc.2 catalog-backed roster', () => {
+  it('hides disabled Team mode without changing the legacy missing-flag behavior', () => {
+    expect(teamProjectionOf(projections('root', { enabled: false, tasks: [] }), 'root')).toBeUndefined()
+    const legacy = team()
+    expect(teamProjectionOf(projections('root', legacy), 'root')).toBe(legacy)
+    expect(teamMembersOf({ enabled: false, tasks: [] }, {}, {}, 'root')).toEqual([])
+  })
+
+  it('renders the lead and direct children without the removed members field', () => {
+    const rows = teamMembersOf({ enabled: true, tasks: [] }, { w: { running: true } }, {
+      root: summary('root', { running: true }), w: summary('w', { running: false }),
+    }, 'root', [
+      { id: 'w', name: 'writer', createdAt: 1, mode: 'one-shot' },
+      { id: 'x', label: 'label', createdAt: 2, mode: 'continuable' },
+      { id: 'y', createdAt: 3, mode: 'one-shot' },
+    ])
+    expect(rows.map(row => [row.id, row.name, row.status])).toEqual([
+      ['root', 'lead', 'running'], ['w', 'writer', 'idle'], ['x', 'label', 'idle'], ['y', 'y', 'idle'],
+    ])
+    for (const row of rows) expect(row.phase).toBeUndefined()
+    expect(teamMembersOf({ enabled: true, tasks: [] }, {}, {})).toEqual([])
+  })
+
+  it('preserves rc.1 roster membership and lifecycle instead of replacing it with all children', () => {
+    const rows = teamMembersOf(team({ members: [member({ phase: 'failed', error: 'spawn failed' })] }), {}, {}, 'root', [
+      { id: 'not-a-member', createdAt: 1, mode: 'one-shot' },
+    ])
+    expect(rows).toEqual([{ id: 'w', name: 'writer', role: 'teammate', phase: 'failed', status: 'failed', diagnostics: ['spawn failed'] }])
+  })
+})

@@ -1,6 +1,6 @@
 # dsh-better-sidebar
 
-> **LHG fork 26.11.10-lhg**: Adds the optional LHG Utils selected-text draft handoff and Side Chat image input. Install/update from `https://github.com/davidLi17/DSH-better-sidebar.git#main`, not the upstream npm `latest` instructions below. Keep LHG Utils and Better Sidebar as separate plugins. Built outputs are committed; no install-time build scripts are required. Requires DSH 0.2.2-rc.1 or a compatible host.
+> **LHG fork 26.11.14-lhg**: Adds the optional LHG Utils selected-text draft handoff and Side Chat image input. Install/update from `https://github.com/davidLi17/DSH-better-sidebar.git#main`, not the upstream npm `latest` instructions below. Keep LHG Utils and Better Sidebar as separate plugins. Built outputs are committed; no install-time build scripts are required. Requires DSH 0.2.2-rc.1 or a compatible host.
 
 
 <div align="center">

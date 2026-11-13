@@ -16,6 +16,7 @@
  *     "Loading…".
  */
 // @vitest-environment jsdom
+import { submenuItems } from './submenu-items'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
@@ -264,7 +265,7 @@ describe('FileTree context-menu cost', () => {
       .find(item => item.getAttribute('aria-haspopup') === 'menu')
     expect(parent).toBeDefined()
     await act(async () => { parent!.click(); await Promise.resolve() })
-    const submenuLabels = [...document.querySelectorAll<HTMLElement>('[role="menu"] [role="menu"] [role="menuitem"]')]
+    const submenuLabels = submenuItems(parent!)
       .map(item => item.textContent?.trim())
     // The default handler is hoisted to level 1; the rest of the list is
     // already there (no disabled Loading row).

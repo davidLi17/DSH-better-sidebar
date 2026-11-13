@@ -31,7 +31,7 @@
  * session, archive) lives in the COMPOSER BAR, not a top header — the reader's
  * attention is on the input, and a header's actions went unnoticed.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useSyncExternalStore } from 'react'
 import clsx from 'clsx'
 import type { SidechatAssistantDecorator } from './service.ts'
@@ -142,9 +142,9 @@ export function consumeSidechatSeed(): string | undefined {
   return value
 }
 
-/** In-flight thread creations keyed by tab id (double-mount guard: React
- *  StrictMode / HMR must not mint two threads for one tab). */
-const inFlightStarts = new Set<string>()
+/** Share creation per native seat: tab ids are session-local. Rebinds and
+ *  StrictMode replay await the same request instead of minting another child. */
+const inFlightStarts = new Map<string, ReturnType<typeof api.sidechatStart>>()
 
 /** Where the last side-chat thread of each main session is remembered (the
  *  client store's own key space, like the diff pane's redaction flag). */
@@ -736,6 +736,21 @@ export function SideChatView(props: {
 
   // The thread this tab is bound to rides tab.meta (refresh-restored).
   const threadId = sidechatThreadIdOf(tab)
+  // Binding generations fence late replies, including an A → B → A switch.
+  const bindingGeneration = useRef(0)
+  // Failure belongs to the native seat, not to a render/list/visibility tick.
+  // Component-owned entries disappear on unmount; only explicit retry clears one.
+  const failedStartsRef = useRef(new Map<string, string>())
+  // Creation binds its own seat without overriding a later user selection.
+  const createdBindingRef = useRef<{ sessionId: string; threadId: string } | null>(null)
+  const composingRef = useRef(false)
+  const composingUntilRef = useRef(0)
+  useLayoutEffect(() => {
+    bindingGeneration.current += 1
+    composingRef.current = false
+    composingUntilRef.current = 0
+    return () => { bindingGeneration.current += 1 }
+  }, [threadId, scope.sessionId])
   const autoCreate = (tab.meta as { autoCreate?: unknown } | undefined)?.autoCreate === true
 
   const [composer, setComposer] = useState('')
@@ -869,12 +884,13 @@ export function SideChatView(props: {
 
   const addImages = async (files: File[]): Promise<void> => {
     if (files.length === 0 || busy !== null || addingImagesRef.current) return
+    const generation = bindingGeneration.current
     addingImagesRef.current = true
     setAddingImages(true)
     setError(null)
     try {
       const policy = await api.sidechatImageLimits()
-      if (!mountedRef.current) return
+      if (!mountedRef.current || generation !== bindingGeneration.current) return
       if (!policy.available || policy.limits === undefined) throw new Error(t('sideChatImagesUnavailable'))
       validateSidechatImages(files, images, policy.limits)
       const added = files.map(file => {
@@ -884,10 +900,12 @@ export function SideChatView(props: {
       })
       setImages(previous => [...previous, ...added])
     } catch (cause) {
-      if (mountedRef.current) setError(cause instanceof Error ? cause.message : String(cause))
+      if (mountedRef.current && generation === bindingGeneration.current) setError(cause instanceof Error ? cause.message : String(cause))
     } finally {
-      addingImagesRef.current = false
-      if (mountedRef.current) setAddingImages(false)
+      if (generation === bindingGeneration.current) {
+        addingImagesRef.current = false
+        if (mountedRef.current) setAddingImages(false)
+      }
     }
   }
 
@@ -924,19 +942,43 @@ export function SideChatView(props: {
 
   /** Create this tab's thread (immediate-create tabs and hero retries). */
   const startThread = useCallback(async (): Promise<void> => {
-    if (inFlightStarts.has(tab.id)) return
-    inFlightStarts.add(tab.id)
+    const key = JSON.stringify([scope.sessionId, tab.id])
+    const generation = bindingGeneration.current
+    failedStartsRef.current.delete(key)
     setBusy('starting')
     setError(null)
     try {
-      const { childId } = await api.sidechatStart(scope.sessionId)
-      // Name the seat session: the same native id names a tab in every session.
+      let request = inFlightStarts.get(key)
+      if (request === undefined) {
+        // Capture once per request, not once per waiting generation. A late
+        // result must not displace a newer remembered choice in this session.
+        const previousThread = lastSidechatThread(scope.sessionId)
+        request = api.sidechatStart(scope.sessionId).then(({ childId }) => {
+          if (lastSidechatThread(scope.sessionId) === previousThread) {
+            rememberSidechatThread(scope.sessionId, childId)
+          }
+          return { childId }
+        })
+        inFlightStarts.set(key, request)
+        // Handle both settlements without a rejecting finally-derived promise.
+        const clear = (): void => {
+          if (inFlightStarts.get(key) === request) inFlightStarts.delete(key)
+        }
+        void request.then(clear, clear)
+      }
+      // Every generation awaits, including a return to A while A is pending.
+      const { childId } = await request
+      if (generation !== bindingGeneration.current) return
+      createdBindingRef.current = { sessionId: scope.sessionId, threadId: childId }
+      // Native tab IDs are session-local: always name the owning session.
       ctx.get('betterSidebar')?.updateTab(tab.id, { meta: { threadId: childId } }, scope.sessionId)
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause))
+      const message = cause instanceof Error ? cause.message : String(cause)
+      failedStartsRef.current.set(key, message)
+      if (generation !== bindingGeneration.current) return
+      setError(message)
     } finally {
-      inFlightStarts.delete(tab.id)
-      setBusy(null)
+      if (generation === bindingGeneration.current) setBusy(null)
     }
   }, [ctx, scope.sessionId, tab.id])
 
@@ -967,12 +1009,18 @@ export function SideChatView(props: {
       ctx.get('betterSidebar')?.updateTab(tab.id, { meta: { threadId: reattach } }, scope.sessionId)
       return
     }
+    if (failedStartsRef.current.has(JSON.stringify([scope.sessionId, tab.id]))) return
     void startThread()
   }, [threadId, autoCreate, visible, startThread, reattachTarget, ctx, tab.id, scope.sessionId])
 
   // Remember the thread this tab holds, so reopening the panel (or a restart)
   // reattaches it instead of minting another one.
   useEffect(() => {
+    const created = createdBindingRef.current
+    createdBindingRef.current = null
+    // The request already conditionally remembered this child. Do not turn
+    // its seat update into an unconditional overwrite of another tab choice.
+    if (created?.sessionId === scope.sessionId && created.threadId === threadId) return
     if (threadId !== undefined) rememberSidechatThread(scope.sessionId, threadId)
   }, [threadId, scope.sessionId])
 
@@ -1002,6 +1050,7 @@ export function SideChatView(props: {
       const cache = cacheRef.current
       const afterSeq = cache.entries.at(-1)?.event.seq
       const { events, live, pending } = await api.sidechatEvents(childId, afterSeq, controller.signal)
+      if (controller.signal.aborted || cache !== cacheRef.current) return
       // The live set is the CURRENT attempt, so it replaces whatever the
       // previous pull held; a settled step drops out of the host buffer and
       // its durable assistant/message takes over in the mapping. The pending
@@ -1022,8 +1071,10 @@ export function SideChatView(props: {
 
   /** The composer-bar badge pull (live state + preset/model identity). */
   const fetchInfo = useCallback(async (childId: string): Promise<void> => {
+    const generation = bindingGeneration.current
     try {
-      setInfo(await api.sidechatInfo(childId))
+      const next = await api.sidechatInfo(childId)
+      if (generation === bindingGeneration.current) setInfo(next)
     } catch {
       // The badge is decorative; a wire failure keeps the last value.
     }
@@ -1039,7 +1090,10 @@ export function SideChatView(props: {
       window.clearTimeout(invalidateRef.current)
       invalidateRef.current = undefined
     }
-    setError(null)
+    setError(threadId === undefined ? failedStartsRef.current.get(JSON.stringify([scope.sessionId, tab.id])) ?? null : null)
+    setBusy(null)
+    addingImagesRef.current = false
+    setAddingImages(false)
     setSaved(false)
     setInfo(null)
     setEcho(null)
@@ -1047,7 +1101,7 @@ export function SideChatView(props: {
       void fetchInfo(threadId)
       window.setTimeout(() => composerRef.current?.focus(), 0)
     }
-  }, [threadId, fetchInfo])
+  }, [threadId, scope.sessionId, tab.id, fetchInfo])
 
   // One transcript pull on every input change (attach, visibility flip,
   // run-state flip — the last one catches a thread's terminal state once it
@@ -1075,7 +1129,9 @@ export function SideChatView(props: {
   // predecessor, so overlapping pulls are already safe).
   const handleInvalidate = useCallback((childId: string): void => {
     if (invalidateRef.current !== undefined) window.clearTimeout(invalidateRef.current)
+    const generation = bindingGeneration.current
     invalidateRef.current = window.setTimeout(() => {
+      if (generation !== bindingGeneration.current) return
       invalidateRef.current = undefined
       void fetchThread(childId)
       void fetchInfo(childId)
@@ -1208,15 +1264,18 @@ export function SideChatView(props: {
     if (busy !== null) return
     setBusy('starting')
     setError(null)
+    const generation = bindingGeneration.current
     try {
       const { childId } = await api.sidechatStart(scope.sessionId)
+      if (generation !== bindingGeneration.current) return
       rememberSidechatThread(scope.sessionId, childId)
       parkSidechatReopen(childId)
       ctx.get('betterSidebar')?.openTab({ type: 'sidechat' }, scope)
     } catch (cause) {
+      if (generation !== bindingGeneration.current) return
       setError(cause instanceof Error ? cause.message : String(cause))
     } finally {
-      setBusy(null)
+      if (generation === bindingGeneration.current) setBusy(null)
     }
   }
 
@@ -1316,10 +1375,13 @@ export function SideChatView(props: {
       return
     }
     setError(null)
+    const generation = bindingGeneration.current
     try {
       await api.sidechatModel(threadId, provider, model, reasoningEffort)
+      if (generation !== bindingGeneration.current) return
       await fetchInfo(threadId)
     } catch (cause) {
+      if (generation !== bindingGeneration.current) return
       setError(cause instanceof Error ? cause.message : String(cause))
     }
   }
@@ -1343,10 +1405,12 @@ export function SideChatView(props: {
     // to be invisible ("sent, nothing happened"). The bubble shows at once and
     // is retired once the inbox or the log carries the message.
     setEcho({ text, images: submittedImages, seq: cacheRef.current.entries.at(-1)?.event.seq ?? 0 })
+    const generation = bindingGeneration.current
     try {
       const content: PromptContentPart[] | undefined = submittedImages.length === 0 ? undefined
         : [...(text === '' ? [] : [{ type: 'text' as const, text }]), ...await Promise.all(submittedImages.map(image => sidechatImagePart(image.file)))]
       const accepted = await api.sidechatPrompt(threadId, text, content)
+      if (generation !== bindingGeneration.current) return
       setEcho(previous => previous === null ? null : { ...previous, messageId: accepted.messageId })
       // A bridge insertion or typing while the request is in flight is a NEW draft.
       setComposer(previous => {
@@ -1360,12 +1424,13 @@ export function SideChatView(props: {
       void fetchThread(threadId)
       void fetchInfo(threadId)
     } catch (cause) {
+      if (generation !== bindingGeneration.current) return
       // Admission/transport failed: retain the exact draft for retry. A lost
       // response can be uncertain, so never automatically repeat the send.
       setEcho(null)
       setError(cause instanceof Error ? cause.message : String(cause))
     } finally {
-      setBusy(null)
+      if (generation === bindingGeneration.current) setBusy(null)
     }
   }
 
@@ -1375,19 +1440,23 @@ export function SideChatView(props: {
     if (threadId === undefined) return
     cacheRef.current.pending = cacheRef.current.pending.filter(item => item.id !== id)
     setRevision(value => value + 1)
+    const generation = bindingGeneration.current
     try {
       await api.sidechatDequeue(threadId, id)
     } catch (cause) {
+      if (generation !== bindingGeneration.current) return
       setError(cause instanceof Error ? cause.message : String(cause))
     }
-    void fetchThread(threadId)
+    if (generation === bindingGeneration.current) void fetchThread(threadId)
   }
 
   const handleCancel = async (): Promise<void> => {
     if (threadId === undefined || busy !== null) return
+    const generation = bindingGeneration.current
     try {
       await api.sidechatCancel(threadId)
     } catch (cause) {
+      if (generation !== bindingGeneration.current) return
       setError(cause instanceof Error ? cause.message : String(cause))
     }
   }
@@ -1407,23 +1476,27 @@ export function SideChatView(props: {
     setBusy('saving')
     setError(null)
     setSaved(false)
+    const generation = bindingGeneration.current
     try {
       // NOTE: fork must stay a METHOD call — `ctx.sessions.fork` is the
       // client-runtime sessions service, and an unbound reference loses
       // `this` (its fork reads this.list for the title bump).
       if (ctx.sessions.fork === undefined) throw new Error('session fork is unavailable')
       const newId = await ctx.sessions.fork({ sessionId: threadId, increaseTitle: true })
+      if (generation !== bindingGeneration.current) return
       const title = summary === undefined ? '' : threadDisplayTitle(summary.displayTitle).trim()
       const binding = ctx.sessions.binding?.(newId)
       if (binding !== undefined && title !== '') {
         await binding.session.rename(title)
       }
+      if (generation !== bindingGeneration.current) return
       ctx.sessions.open?.(newId)
       setSaved(true)
     } catch (cause) {
+      if (generation !== bindingGeneration.current) return
       setError(cause instanceof Error ? cause.message : String(cause))
     } finally {
-      setBusy(null)
+      if (generation === bindingGeneration.current) setBusy(null)
     }
   }
 
@@ -1437,16 +1510,19 @@ export function SideChatView(props: {
     setBusy('archiving')
     setError(null)
     setSaved(false)
+    const generation = bindingGeneration.current
     try {
       const service = ctx.get('uiWorkspace') as unknown as ArchiveSessionFace | undefined
       if (service?.archiveSession === undefined) throw new Error('the workspace service is unavailable')
       await service.archiveSession(threadId, { stopActivity: true })
+      if (generation !== bindingGeneration.current) return
       const next = fallbackThreadId(threadId)
       ctx.get('betterSidebar')?.updateTab(tab.id, { meta: next === undefined ? {} : { threadId: next } })
     } catch (cause) {
+      if (generation !== bindingGeneration.current) return
       setError(cause instanceof Error ? cause.message : String(cause))
     } finally {
-      setBusy(null)
+      if (generation === bindingGeneration.current) setBusy(null)
     }
   }
 
@@ -1576,6 +1652,11 @@ export function SideChatView(props: {
             setComposer(event.target.value)
             growComposer()
           }}
+          onCompositionStart={() => { composingRef.current = true }}
+          onCompositionEnd={() => {
+            composingRef.current = false
+            composingUntilRef.current = Date.now() + 10
+          }}
           onPaste={event => {
             const files = Array.from(event.clipboardData.files).filter(file => file.type.startsWith('image/'))
             if (files.length === 0) return
@@ -1584,8 +1665,15 @@ export function SideChatView(props: {
             void addImages(files)
           }}
           onKeyDown={event => {
-            if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return
+            const native = event.nativeEvent
+            // Live IME keys belong to the candidate picker, including legacy 229.
+            if (native.isComposing || composingRef.current || native.keyCode === 229) return
+            if (event.key !== 'Enter' || event.shiftKey) return
             event.preventDefault()
+            // Safari can close composition before its final Enter arrives.
+            // Never let a held key retry an uncertain or failed request.
+            if (Date.now() < composingUntilRef.current || native.repeat) return
+            if (event.altKey || native.getModifierState('AltGraph') || (event.ctrlKey && event.metaKey)) return
             void handleSend()
           }}
         />

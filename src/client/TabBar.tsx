@@ -8,6 +8,7 @@
  * right / close all — every close scoped to this pane — plus reveal the
  * right-clicked tab's file in the OS file manager).
  */
+import { menuPointAnchor } from './menu-point-anchor.ts'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import clsx from 'clsx'
 import {
@@ -366,7 +367,7 @@ export function TabBar(props: {
           portal
           compact
           align="start"
-          getAnchorRect={() => (tabMenu === null ? null : new DOMRect(tabMenu.x, tabMenu.y, 0, 0))}
+          {...menuPointAnchor(tabMenu)}
           anchor={<span />}
         />
       </div>

@@ -1,3 +1,13 @@
+## 26.11.14-lhg — 2026-11-14 (self-use fork)
+
+- Selectively absorb IME and held-Enter safeguards from upstream `bed56758c7c9d7aefb3023cc0efce6c1d93e7b46`; preserve LHG drafts, images, and selected-text handoff without merging the side-chat redesign.
+- Fence async operations by binding generation and share pending creation per main session/tab, preserving StrictMode and A→B→A behavior.
+- Supply both rc.1 getAnchorRect and rc.2 anchorPoint at the four context-menu call sites. Keep peer floors and installers unchanged; run browser CI against the exact rc.3 host.
+- Support rc.2 built-in Agent Team mode and catalog-backed membership while preserving the rc.1 roster and mutation semantics.
+- Reconstructed from the remote baseline. Historical workspace test results do not validate this candidate.
+- Real rc.3 browser validation exposed a Mermaid toolbar drag-region dependency; declare no-drag on the plugin buttons while retaining the neutral viewport reset.
+- Recovery, rc.3 contract review and validation are recorded in `docs/plans/2026-11-14-dsh-rc3-validation.md`.
+
 ## 26.11.10-lhg — 2026-11-10
 
 - Adapt to DSH 0.2.2-rc.1 using the host-owned `agent.model` selection and unpublished create/resume setup for model-switch notices.

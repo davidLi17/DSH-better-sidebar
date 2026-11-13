@@ -42,6 +42,7 @@
  * (VSCode semantics — a drop on a file row targets its parent directory),
  * and `busy` gates new drags while one upload is in flight.
  */
+import { menuPointAnchor } from './menu-point-anchor.ts'
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import clsx from 'clsx'
@@ -2445,7 +2446,7 @@ export function FileTree(props: {
         portal
         compact
         align="start"
-        getAnchorRect={() => (rowMenu === null ? null : new DOMRect(rowMenu.x, rowMenu.y, 0, 0))}
+        {...menuPointAnchor(rowMenu)}
         anchor={<span />}
       />
 

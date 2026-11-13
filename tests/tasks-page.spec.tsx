@@ -765,6 +765,21 @@ describe('Tasks page: owned tasks, host-primitive controls, draggable output', (
   })
 })
 
+describe('Tasks page: rc.2 Team projection', () => {
+  it('opens a team page with catalog members instead of crashing on missing members', async () => {
+    teamProjection = { enabled: true, tasks: [] }
+    const store = makeStore(snapshotWithChildren(1))
+    const { container, unmount } = renderRoot(
+      createElement(SubagentView, { sessionId: 'root', active: true, ctx: makeCtx(store) }),
+    )
+    await act(async () => { await Promise.resolve() })
+    expect(container.querySelector('[data-graph-node="root"]')).not.toBeNull()
+    expect(container.querySelector('[data-graph-node="child-0"]')).not.toBeNull()
+    expect(container.textContent).not.toContain("Cannot read properties")
+    unmount()
+  })
+})
+
 describe('Tasks page: the shared task window', () => {
   it('opens from an agent node task line and saves a multi-line edit', async () => {
     withTeam({

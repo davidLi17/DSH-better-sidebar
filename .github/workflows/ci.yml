@@ -155,6 +155,8 @@ jobs:
     # into the DSH composition (same guard DSH's own CI uses).
     env:
       DSH_TELEMETRY_DISABLED: '1'
+      DSH_EXPECT_VERSION: '0.2.2-rc.3'
+      DSH_NPX_SPEC: '@deepseek-ai/dsh@0.2.2-rc.3'
     steps:
       - uses: actions/checkout@v7
 
@@ -171,14 +173,14 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # Pin the exact 0.2.2-rc.1 host CLI; never use a dist-tag.
+      # Pin the exact 0.2.2-rc.3 host CLI; never use a dist-tag.
       # Keep peer resolution ON: do not add --legacy-peer-deps; it skips boot peers.
       # The lanes speak the slash-only RPC dialect (tests/e2e/host-protocol.ts).
       # NODE_OPTIONS below preserves the heap budget needed for prerelease peer resolution.
       - name: Install dsh CLI (pinned)
         env:
           NODE_OPTIONS: --max-old-space-size=4096
-        run: npm install -g @deepseek-ai/dsh@0.2.2-rc.1
+        run: npm install -g @deepseek-ai/dsh@0.2.2-rc.3
 
       # lib/ is gitignored; the tarball is produced from this build.
       - name: Build and pack the npm tarball

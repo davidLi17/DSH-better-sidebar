@@ -15,7 +15,7 @@
  */
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createElement } from 'react'
+import { createElement, StrictMode } from 'react'
 import { act } from 'react-dom/test-utils'
 import { renderRoot, setupReactAct } from './test-utils.ts'
 import { deliverSidechatDraft } from '../src/client/sidechat-draft-bridge.ts'
@@ -72,10 +72,14 @@ const EVENTS = [
 
 /** A subscribable sessions-list snapshot (mirror of the runtime list feed). */
 function makeStore(initial: SidebarSessionList) {
-  const snapshot = initial
+  let snapshot = initial
   const listeners = new Set<() => void>()
   return {
     getSnapshot: (): SidebarSessionList => snapshot,
+    set: (next: SidebarSessionList): void => {
+      snapshot = next
+      for (const listener of listeners) listener()
+    },
     subscribe: (fn: () => void) => {
       listeners.add(fn)
       return () => { listeners.delete(fn) }
@@ -330,6 +334,273 @@ function threadStore(): ReturnType<typeof makeStore> {
 }
 
 describe('SideChatView rendering', () => {
+  it('does not submit IME confirmation or held Enter after a failed request', async () => {
+    const { container, unmount } = renderRoot(createElement(SideChatView, viewProps(makeCtx(threadStore()))))
+    await act(async () => {})
+    await act(async () => { typeComposer(container, '保留草稿') })
+    const field = container.querySelector('textarea')!
+    const key = async (init: KeyboardEventInit = {}) => {
+      const event = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true, ...init })
+      await act(async () => { field.dispatchEvent(event) })
+      return event
+    }
+    await key({ isComposing: true })
+    await key({ keyCode: 229 })
+    await act(async () => { field.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true })) })
+    await key()
+    await act(async () => { field.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true })) })
+    expect((await key()).defaultPrevented).toBe(true)
+    expect(promptCalls).toHaveLength(0)
+    await new Promise(resolve => setTimeout(resolve, 20))
+    promptError = 'retry manually'
+    await key()
+    expect(promptCalls).toHaveLength(1)
+    expect(field.value).toBe('保留草稿')
+    expect((await key({ repeat: true })).defaultPrevented).toBe(true)
+    expect(promptCalls).toHaveLength(1)
+    promptError = null
+    await key()
+    expect(promptCalls).toHaveLength(2)
+    expect(field.value).toBe('')
+    unmount()
+  })
+
+  it('does not clear a rebound draft and resets its composition state', async () => {
+    const props = viewProps(makeCtx(threadStore()))
+    const { container, rerender, unmount } = renderRoot(createElement(SideChatView, props))
+    await act(async () => {})
+    let release!: () => void
+    promptHold = new Promise<void>(resolve => { release = resolve })
+    await act(async () => { typeComposer(container, 'old draft') })
+    await act(async () => { container.querySelector('textarea')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })) })
+    expect(promptCalls).toHaveLength(1)
+    await act(async () => { container.querySelector('textarea')!.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true })) })
+    rerender(createElement(SideChatView, { ...props, tab: { ...props.tab, meta: { threadId: 't2' } } }))
+    await act(async () => { typeComposer(container, 'new binding draft') })
+    await act(async () => { release() })
+    expect(container.querySelector('textarea')!.value).toBe('new binding draft')
+    await act(async () => { container.querySelector('textarea')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })) })
+    expect(promptCalls).toHaveLength(2)
+    expect(promptCalls[1]?.childId).toBe('t2')
+    unmount()
+  })
+
+  it('ignores a previous binding info response', async () => {
+    const originalFetch = globalThis.fetch
+    let release!: (response: Response) => void
+    let first = true
+    vi.stubGlobal('fetch', (url: string | URL, init?: RequestInit) => {
+      if (String(url).endsWith('/sidechat.info') && first) {
+        first = false
+        return new Promise<Response>(resolve => { release = resolve })
+      }
+      return originalFetch(url, init)
+    })
+    const props = viewProps(makeCtx(threadStore()))
+    const { container, rerender, unmount } = renderRoot(createElement(SideChatView, props))
+    await act(async () => {})
+    infoValue = { live: false, model: 'new-model', provider: 'deepseek', preset: 'side' }
+    rerender(createElement(SideChatView, { ...props, tab: { ...props.tab, meta: { threadId: 't2' } } }))
+    await act(async () => {})
+    await act(async () => { release(jsonResponse({ ok: true, value: { live: false, model: 'stale-model', provider: 'deepseek', preset: 'side' } })) })
+    expect(container.querySelector('button[aria-label="模型"]')?.textContent).toContain('new-model')
+    expect(container.textContent).not.toContain('stale-model')
+    unmount()
+  })
+
+  it.each([
+    ['model', false], ['model', true], ['dequeue', false], ['dequeue', true],
+  ] as const)('fences late %s completion across A → B → A (reject=%s)', async (operation, reject) => {
+    catalogValue = { available: true, groups: [{ id: 'deepseek', models: [{ id: 'chat', name: 'Chat' }, { id: 'reasoner', name: 'Reasoner' }] }], failures: [] }
+    infoValue = { live: false, provider: 'deepseek', model: 'chat', preset: 'side' }
+    pendingValue = [{ id: 'm1', target: 'next-step', text: 'queued in old A' }]
+    const originalFetch = globalThis.fetch
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    let calls = 0
+    let infoPulls = 0
+    vi.stubGlobal('fetch', async (url: string | URL, init?: RequestInit) => {
+      const method = String(url).split('/').pop()
+      if (method === 'sidechat.info') infoPulls += 1
+      if (method === `sidechat.${operation}`) {
+        calls += 1
+        await gate
+        if (reject) throw new Error('old operation failed')
+        return jsonResponse({ ok: true, value: { accepted: true, removed: 1 } })
+      }
+      return originalFetch(url, init)
+    })
+    const props = viewProps(makeCtx(threadStore()))
+    const { container, rerender, unmount } = renderRoot(createElement(SideChatView, props))
+    await act(async () => {})
+    if (operation === 'model') {
+      await act(async () => { container.querySelector<HTMLButtonElement>('button[aria-label="模型"]')!.click() })
+      const items = [...document.body.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]')]
+      await act(async () => { items.find(item => item.textContent === 'Reasoner')!.click() })
+    } else {
+      await act(async () => { container.querySelector<HTMLButtonElement>('button[aria-label="从队列移除"]')!.click() })
+    }
+    expect(calls).toBe(1)
+    infoValue = { live: false, provider: 'deepseek', model: 'current-A-model', preset: 'side' }
+    pendingValue = [{ id: 'current', target: 'next-step', text: 'current A queue' }]
+    rerender(createElement(SideChatView, { ...props, tab: { ...props.tab, meta: { threadId: 't2' } } }))
+    await act(async () => {})
+    rerender(createElement(SideChatView, props))
+    await act(async () => {})
+    const previousInfoPulls = infoPulls
+    const previousEventsPulls = eventsPulls
+    await act(async () => { release() })
+    expect(infoPulls).toBe(previousInfoPulls)
+    expect(eventsPulls).toBe(previousEventsPulls)
+    expect(container.querySelector('button[aria-label="模型"]')?.textContent).toContain('current-A-model')
+    expect(container.textContent).toContain('current A queue')
+    expect(container.textContent).not.toContain('old operation failed')
+    unmount()
+  })
+
+  it.each([false, true])('shares creation across StrictMode/A → B → A (A settles while away=%s)', async completeWhileAway => {
+    const sessionA = `create-A-${String(completeWhileAway)}`
+    const sessionB = `create-B-${String(completeWhileAway)}`
+    const originalFetch = globalThis.fetch
+    const requests: string[] = []
+    const releases = new Map<string, (response: Response) => void>()
+    vi.stubGlobal('fetch', (url: string | URL, init?: RequestInit) => {
+      if (String(url).endsWith('/sidechat.start')) {
+        const { sessionId } = JSON.parse(String(init?.body)) as { sessionId: string }
+        requests.push(sessionId)
+        return new Promise<Response>(resolve => { releases.set(sessionId, resolve) })
+      }
+      return originalFetch(url, init)
+    })
+    const updateTab = vi.fn()
+    const ctx = { ...makeCtx(makeStore({ byId: {} })), get: (key: string) => key === 'betterSidebar' ? { updateTab } : undefined } as unknown as Context
+    const props = { ...viewProps(ctx), tab: { id: 'tab1', type: 'sidechat', title: '', meta: { autoCreate: true } } }
+    const view = (sessionId: string) => createElement(StrictMode, null, createElement(SideChatView, { ...props, scope: { sessionId, cwd: '/p' } }))
+    const { rerender, unmount } = renderRoot(view(sessionA))
+    await act(async () => {})
+    expect(requests).toEqual([sessionA])
+    rerender(view(sessionB))
+    await act(async () => {})
+    expect(requests).toEqual([sessionA, sessionB])
+    if (completeWhileAway) {
+      await act(async () => { releases.get(sessionA)!(jsonResponse({ ok: true, value: { childId: 'child-A' } })) })
+      expect(updateTab).not.toHaveBeenCalled()
+    }
+    rerender(view(sessionA))
+    await act(async () => {})
+    expect(requests).toEqual([sessionA, sessionB])
+    await act(async () => { releases.get(sessionB)!(jsonResponse({ ok: true, value: { childId: 'child-B' } })) })
+    if (!completeWhileAway) {
+      expect(updateTab).not.toHaveBeenCalled()
+      await act(async () => { releases.get(sessionA)!(jsonResponse({ ok: true, value: { childId: 'child-A' } })) })
+    }
+    expect(updateTab).toHaveBeenCalledExactlyOnceWith('tab1', { meta: { threadId: 'child-A' } }, sessionA)
+    unmount()
+  })
+
+  it.each([false, true])('keeps newer selection after late creation (old seat remains mounted=%s)', async keepMounted => {
+    const sessionId = `newer-choice-${String(keepMounted)}`
+    const originalFetch = globalThis.fetch
+    let release!: (response: Response) => void
+    let calls = 0
+    vi.stubGlobal('fetch', (url: string | URL, init?: RequestInit) => {
+      if (String(url).endsWith('/sidechat.start')) {
+        calls += 1
+        return new Promise<Response>(resolve => { release = resolve })
+      }
+      return originalFetch(url, init)
+    })
+    const updateTab = vi.fn()
+    const ctx = { ...makeCtx(makeStore({ byId: {} })), get: (key: string) => key === 'betterSidebar' ? { updateTab } : undefined } as unknown as Context
+    const props = { ...viewProps(ctx), scope: { sessionId, cwd: '/p' }, tab: { id: 'old-tab', type: 'sidechat', title: '', meta: { autoCreate: true } } }
+    const old = renderRoot(createElement(SideChatView, props))
+    await act(async () => {})
+    expect(calls).toBe(1)
+    if (!keepMounted) old.unmount()
+    const chosen = renderRoot(createElement(SideChatView, { ...props, tab: { id: 'chosen-tab', type: 'sidechat', title: '', meta: { threadId: 'tNew' } } }))
+    await act(async () => {})
+    await act(async () => { release(jsonResponse({ ok: true, value: { childId: 'childOld' } })) })
+    if (keepMounted) {
+      old.rerender(createElement(SideChatView, { ...props, tab: { ...props.tab, meta: { threadId: 'childOld' } } }))
+      await act(async () => {})
+      old.unmount()
+    }
+    chosen.unmount()
+    updateTab.mockClear()
+    const reopened = renderRoot(createElement(SideChatView, { ...props, tab: { ...props.tab, id: 'reopened-tab' } }))
+    await act(async () => {})
+    expect(calls).toBe(1)
+    expect(updateTab).toHaveBeenCalledExactlyOnceWith('reopened-tab', { meta: { threadId: 'tNew' } }, sessionId)
+    reopened.unmount()
+  })
+
+  it('binds concurrent same-session different seats to their own created children', async () => {
+    const originalFetch = globalThis.fetch
+    const releases: Array<(response: Response) => void> = []
+    vi.stubGlobal('fetch', (url: string | URL, init?: RequestInit) => {
+      if (String(url).endsWith('/sidechat.start')) return new Promise<Response>(resolve => { releases.push(resolve) })
+      return originalFetch(url, init)
+    })
+    const updateTab = vi.fn()
+    const ctx = { ...makeCtx(makeStore({ byId: {} })), get: (key: string) => key === 'betterSidebar' ? { updateTab } : undefined } as unknown as Context
+    const props = { ...viewProps(ctx), scope: { sessionId: 'parallel-seats', cwd: '/p' } }
+    const view = (id: string, threadId?: string) => createElement(SideChatView, {
+      ...props, tab: { id, type: 'sidechat', title: '', meta: threadId === undefined ? { autoCreate: true } : { threadId } },
+    })
+    const first = renderRoot(view('first'))
+    const second = renderRoot(view('second'))
+    await act(async () => {})
+    expect(releases).toHaveLength(2)
+    await act(async () => { releases[0]!(jsonResponse({ ok: true, value: { childId: 'child1' } })) })
+    first.rerender(view('first', 'child1'))
+    await act(async () => { releases[1]!(jsonResponse({ ok: true, value: { childId: 'child2' } })) })
+    second.rerender(view('second', 'child2'))
+    await act(async () => {})
+    expect(updateTab).toHaveBeenCalledWith('first', { meta: { threadId: 'child1' } }, 'parallel-seats')
+    expect(updateTab).toHaveBeenCalledWith('second', { meta: { threadId: 'child2' } }, 'parallel-seats')
+    first.unmount()
+    second.unmount()
+    updateTab.mockClear()
+    const reopened = renderRoot(view('reopened'))
+    await act(async () => {})
+    expect(releases).toHaveLength(2)
+    expect(updateTab).toHaveBeenCalledExactlyOnceWith('reopened', { meta: { threadId: 'child1' } }, 'parallel-seats')
+    reopened.unmount()
+  })
+
+  it('clears rejected shared creation without automatically retrying', async () => {
+    const originalFetch = globalThis.fetch
+    let calls = 0
+    let rejectStart!: (reason: Error) => void
+    vi.stubGlobal('fetch', (url: string | URL, init?: RequestInit) => {
+      if (String(url).endsWith('/sidechat.start')) {
+        calls += 1
+        if (calls === 1) return new Promise<Response>((_resolve, reject) => { rejectStart = reject })
+        return jsonResponse({ ok: true, value: { childId: 'retried-child' } })
+      }
+      return originalFetch(url, init)
+    })
+    const updateTab = vi.fn()
+    const store = makeStore({ byId: {} })
+    const ctx = { ...makeCtx(store), get: (key: string) => key === 'betterSidebar' ? { updateTab } : undefined } as unknown as Context
+    const props = { ...viewProps(ctx), scope: { sessionId: 'failed-create', cwd: '/p' }, tab: { id: 'tab1', type: 'sidechat', title: '', meta: { autoCreate: true } } }
+    const { container, rerender, unmount } = renderRoot(createElement(StrictMode, null, createElement(SideChatView, props)))
+    await act(async () => { rejectStart(new Error('creation unavailable')) })
+    expect(calls).toBe(1)
+    expect(container.textContent).toContain('creation unavailable')
+    await act(async () => { store.set({ byId: { unrelated: { id: 'unrelated', displayTitle: 'other', running: false } } }) })
+    rerender(createElement(StrictMode, null, createElement(SideChatView, { ...props, visible: false })))
+    await act(async () => {})
+    rerender(createElement(StrictMode, null, createElement(SideChatView, props)))
+    await act(async () => {})
+    expect(calls).toBe(1)
+    expect(container.textContent).toContain('creation unavailable')
+    await act(async () => { container.querySelector<HTMLButtonElement>('button')!.click() })
+    expect(calls).toBe(2)
+    expect(updateTab).toHaveBeenCalledExactlyOnceWith('tab1', { meta: { threadId: 'retried-child' } }, 'failed-create')
+    unmount()
+  })
+
   it('renders the bash pair as a TerminalBlock and the turn tail with usage + duration', async () => {
     const props = viewProps(makeCtx(threadStore()))
     const { container, unmount } = renderRoot(createElement(SideChatView, props))

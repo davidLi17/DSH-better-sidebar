@@ -2015,8 +2015,8 @@ body[data-dsh-sidebar-dragging] .bottomPanel {
      pointer-events — without this reset the open modal cancels every
      window-drag strip under it plus the macOS double-click-title zoom.
      Same contract as the panel host rule above; `initial` computes to the
-     neutral `none`, and the toolbar's buttons keep their own no-drag from
-     the shell's `:is(button, …)` rule. */
+     neutral `none`. Toolbar buttons declare their own no-drag below, so
+     they do not depend on the host's optional desktop stylesheet. */
   -webkit-app-region: initial !important;
   z-index: 1000;
   display: flex;
@@ -2037,6 +2037,7 @@ body[data-dsh-sidebar-dragging] .bottomPanel {
 }
 
 .mermaidModalButton {
+  -webkit-app-region: no-drag;
   width: 36px;
   height: 36px;
   border-radius: 8px;

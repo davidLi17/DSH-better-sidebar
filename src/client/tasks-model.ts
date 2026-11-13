@@ -72,8 +72,8 @@ export interface TasksAgentNode {
   team?: {
     role: 'lead' | 'teammate'
     name: string
-    /** Durable lifecycle of the roster row (`provisioning | active | failed`). */
-    phase: SidebarTeamMemberProjection['phase']
+    /** rc.1 lifecycle; rc.2 does not publish this field. */
+    phase?: SidebarTeamMemberProjection['phase']
     /** The member's derived display status (see ./team-projection.ts). */
     status: TeamMemberRow['status']
     diagnostics: string[]
@@ -341,6 +341,8 @@ export function buildTasksModel(input: TasksModelInput): TasksNode[] {
   /** Owner display name → node id (the board assigns by member name). */
   const nodeByOwner = new Map<string, string>()
   for (const member of teamMembers) nodeByOwner.set(member.name, member.id)
+  // rc.2 spells the Lead's agent path as an empty string.
+  if (teamById.has(rootId)) nodeByOwner.set('', rootId)
   const tasksByNode = new Map<string, TasksNodeTask[]>()
   for (const task of teamTasks) {
     if (task.status === 'deleted' || task.ownerName === undefined) continue

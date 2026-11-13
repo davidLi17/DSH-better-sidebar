@@ -13,9 +13,9 @@
  *
  * What remains cannot be done in the browser: `createTask` / `updateTask`
  * demand the exact live Lead Agent as their authority credential, which only
- * the host holds. The experimental `dsh-experimental-agent-team` service
- * (`ctx.agentTeams`) exists only when the deployment opts in, so the routes
- * degrade structurally:
+ * the host holds. rc.1 supplies the optional experimental Team service; rc.2
+ * supplies the built-in `dsh-agent-team` service with per-tree Team mode.
+ * Both are exposed as `ctx.agentTeams`; the routes degrade structurally:
  *
  * - service absent (`ctx.get('agentTeams')` undefined) → 503 `team-error`
  *   (a mutation can never be accepted there; the page silently hides the
@@ -23,7 +23,7 @@
  *   belt to that pair of braces);
  * - the tree's root agent is not live in this process (cold session / another
  *   harness) → 404 `team-error`; teams are live-led by definition;
- * - the root leads no team (`tryMembership` miss) → 404 `team-error`.
+ * - rc.1 membership is absent, or rc.2 `isEnabled` is false → 404 `team-error`.
  *
  * Rejections are THROWN by 0.1.7 (0.1.6 returned a `TeamTaskMutationResult`
  * union), so the CAS conflict has to be translated back into a wire code the
@@ -34,7 +34,7 @@
  * method demands the live member Agent as its authority token, so the routes
  * re-derive the caller per request (`ctx.agents.get(rootSessionId)`) exactly
  * like the jobs.kill fence. Zero DSH source changes; the plugin never imports
- * the experimental package (structural mirrors only).
+ * either Team package (structural mirrors for rc.1 and rc.2 only).
  */
 import type { Context, SidebarTeamTaskMutationResult } from './context-types.ts';
 /** The Agent Teams write routes of the sidebar API. */

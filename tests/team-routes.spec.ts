@@ -227,3 +227,57 @@ describe('teams.taskUpdate route', () => {
     expect(Object.keys(teams)).not.toContain('remoteView')
   })
 })
+
+describe('rc.2 Team mode compatibility', () => {
+  it('uses isEnabled for writes and never falls back when the mode is disabled', async () => {
+    const teams = {
+      isEnabled: vi.fn(() => false),
+      tryMembership: vi.fn(() => ({ role: 'lead' })),
+      createTask: vi.fn(async () => task()),
+      updateTask: vi.fn(async () => task()),
+    }
+    const api = buildTeamsApi(ctxWith(teams, agentsWithRoot()))
+    await expect(api.taskCreate({ rootSessionId: 'root', subject: 's' }))
+      .rejects.toThrowError(expect.objectContaining({ status: 404 }))
+    await expect(api.taskUpdate({ rootSessionId: 'root', taskId: 't', expectedRevision: 1, action: 'complete' }))
+      .rejects.toThrowError(expect.objectContaining({ status: 404 }))
+    expect(teams.tryMembership).not.toHaveBeenCalled()
+    expect(teams.createTask).not.toHaveBeenCalled()
+    expect(teams.updateTask).not.toHaveBeenCalled()
+    teams.isEnabled.mockReturnValue(true)
+    await expect(api.taskCreate({ rootSessionId: 'root', subject: 's' })).resolves.toEqual({ ok: true, value: task() })
+    expect(teams.isEnabled).toHaveBeenLastCalledWith({ id: 'root' })
+  })
+
+  it('re-reads both services after a late mount and handles stale agents', async () => {
+    const services: { teams?: unknown; agents?: unknown } = {}
+    const ctx = { get: (key: string) => key === 'agentTeams' ? services.teams : key === 'agents' ? services.agents : undefined } as unknown as Context
+    const api = buildTeamsApi(ctx)
+    await expect(api.taskCreate({ rootSessionId: 'root', subject: 's' }))
+      .rejects.toThrowError(expect.objectContaining({ status: 503 }))
+    const isEnabled = vi.fn(() => true)
+    const createTask = vi.fn(async () => task())
+    services.teams = { isEnabled, createTask }
+    services.agents = agentsWithRoot()
+    await expect(api.taskCreate({ rootSessionId: 'root', subject: 's' })).resolves.toEqual({ ok: true, value: task() })
+    isEnabled.mockImplementation(() => { throw new Error('stale') })
+    await expect(api.taskCreate({ rootSessionId: 'root', subject: 's' }))
+      .rejects.toThrowError(expect.objectContaining({ status: 404 }))
+    expect(createTask).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects unsupported service shapes rather than accepting a write', async () => {
+    const createTask = vi.fn()
+    const api = buildTeamsApi(ctxWith({ createTask }, agentsWithRoot()))
+    await expect(api.taskCreate({ rootSessionId: 'root', subject: 's' }))
+      .rejects.toThrowError(expect.objectContaining({ status: 503 }))
+    expect(createTask).not.toHaveBeenCalled()
+  })
+
+  it('keeps rc.2 stale-revision failures distinct from other write failures', async () => {
+    const updateTask = vi.fn(async () => { throw teamError('TEAM_TASK_STALE_REVISION', 'stale') })
+    const api = buildTeamsApi(ctxWith({ isEnabled: () => true, updateTask }, agentsWithRoot()))
+    await expect(api.taskUpdate({ rootSessionId: 'root', taskId: 't', expectedRevision: 1, action: 'complete' }))
+      .rejects.toThrowError(expect.objectContaining({ code: 'team-conflict', status: 409 }))
+  })
+})

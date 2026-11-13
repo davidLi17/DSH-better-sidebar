@@ -7,6 +7,7 @@
  * UI semantics reference: VS Code 76f9f309edc0682f4ef9465be8d12af754b87236,
  * extensions/git and src/vs/workbench/contrib/scm (not a runtime dependency).
  */
+import { menuPointAnchor } from '../menu-point-anchor.ts'
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react'
 import {
   IconBranchOutlineRegular, IconCheckOutlineRegular, IconChevronRightOutlineRegular,
@@ -1261,7 +1262,7 @@ export function GitLens(props: GitLensProps) {
         portal
         compact
         align="start"
-        getAnchorRect={() => (fileMenu === null ? null : new DOMRect(fileMenu.x, fileMenu.y, 0, 0))}
+        {...menuPointAnchor(fileMenu)}
         anchor={<span />}
       />
 
@@ -1319,7 +1320,7 @@ export function GitLens(props: GitLensProps) {
         portal
         compact
         align="start"
-        getAnchorRect={() => (historyMenu === null ? null : new DOMRect(historyMenu.x, historyMenu.y, 0, 0))}
+        {...menuPointAnchor(historyMenu)}
         anchor={<span />}
       />
 

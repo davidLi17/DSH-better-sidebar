@@ -1,6 +1,6 @@
 # 外部插件接入指南：基于 dsh-better-sidebar 实现新页面
 
-> **LHG fork 26.11.10-lhg**：当前基线 DSH 0.2.2-rc.1，`SIDEBAR_SERVICE_VERSION` 同步为 `26.11.10-lhg`。公开侧栏服务与选区草稿/图片 API 不变。侧聊模型选择已迁移为宿主 `agent.model`；以下 v0.28.0 版本说明保留作上游历史参考。适配记录见 [2026-11-10 记录](plans/2026-11-10-dsh-0.2.2-rc.1-adaptation.md)。
+> **LHG fork 26.11.13-lhg**：当前基线 DSH 0.2.2-rc.1，`SIDEBAR_SERVICE_VERSION` 同步为 `26.11.13-lhg`。公开侧栏服务与选区草稿/图片 API 不变。侧聊模型选择已迁移为宿主 `agent.model`；以下 v0.28.0 版本说明保留作上游历史参考。适配记录见 [2026-11-10 记录](plans/2026-11-10-dsh-0.2.2-rc.1-adaptation.md)。
 
 > 面向 **消费插件开发者**：如何让你的插件向 better-sidebar 注册新的侧边栏页面（tab）和文件类型预览器。
 >
@@ -1339,3 +1339,7 @@ source key such as `JSON.stringify(['sidechat', threadId, seq])` for quote navig
 `subscribe()` reports changes. Register via an optional Cordis `betterSidebar` injection
 and dispose with that scope; capability-check this method for older Sidebar versions.
 Do not resolve sidechat citation links against the main chat transcript.
+
+### rc.3 desktop drag-region compatibility
+
+Mermaid zoom-toolbar buttons explicitly declare `-webkit-app-region: no-drag`; the viewport-sized modal keeps its `initial !important` reset. Do not rely on the host mounting a global desktop button rule in every Web composition. The real-browser mount suite checks both computed values.

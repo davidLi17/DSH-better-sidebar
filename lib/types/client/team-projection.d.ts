@@ -1,3 +1,4 @@
+/** rc.1 preserves its durable roster; rc.2 reads enabled + direct-child catalog. */
 /**
  * The plugin's view of DSH 0.1.7's `agentTeam` Session projection — the Lead
  * Session's team board, read straight off the client snapshot.
@@ -28,7 +29,7 @@
  * detail no longer has a model row to show. See the design note
  * docs/plans/2026-09-27-agent-teams-dsh-0.1.7-adaptation.md.
  */
-import type { SidebarChildLiveView, SidebarSessionList, SidebarSessionSummary, SidebarTeamMemberProjection, SidebarTeamProjection } from '../context-types.ts';
+import type { SidebarChildLiveView, SidebarSessionList, SidebarSessionSummary, SidebarTeamMemberProjection, SidebarTeamProjection, SidebarSubagentCatalogEntry } from '../context-types.ts';
 /**
  * One roster row as this page consumes it: the projection's durable half plus
  * the derived runtime status. A THIRD type next to the host service's
@@ -42,8 +43,8 @@ export interface TeamMemberRow {
     id: string;
     name: string;
     role: 'lead' | 'teammate';
-    /** Durable lifecycle, as the projection publishes it. */
-    phase: SidebarTeamMemberProjection['phase'];
+    /** rc.1 durable lifecycle; absent on the catalog-backed rc.2 roster. */
+    phase?: SidebarTeamMemberProjection['phase'];
     /** Derived display status: durable phase wins, else the live activity flag. */
     status: 'running' | 'idle' | 'provisioning' | 'failed';
     /** The durable provisioning error as a one-item list (see the header). */
@@ -78,4 +79,4 @@ export declare function teamProjectionOf(projections: SidebarSessionList['projec
  * @param live - the `subagents.live` map (`session id → live view`).
  * @param byId - the session list by id (the Lead's own running flag lives here).
  */
-export declare function teamMembersOf(team: SidebarTeamProjection | undefined, live: Readonly<Record<string, SidebarChildLiveView | undefined>>, byId: Readonly<Record<string, SidebarSessionSummary | undefined>>): TeamMemberRow[];
+export declare function teamMembersOf(team: SidebarTeamProjection | undefined, live: Readonly<Record<string, SidebarChildLiveView | undefined>>, byId: Readonly<Record<string, SidebarSessionSummary | undefined>>, rootId?: string, entries?: readonly SidebarSubagentCatalogEntry[]): TeamMemberRow[];

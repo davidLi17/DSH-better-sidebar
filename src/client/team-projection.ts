@@ -1,3 +1,4 @@
+/** rc.1 preserves its durable roster; rc.2 reads enabled + direct-child catalog. */
 /**
  * The plugin's view of DSH 0.1.7's `agentTeam` Session projection — the Lead
  * Session's team board, read straight off the client snapshot.
@@ -34,6 +35,7 @@ import type {
   SidebarSessionSummary,
   SidebarTeamMemberProjection,
   SidebarTeamProjection,
+  SidebarSubagentCatalogEntry,
 } from '../context-types.ts'
 
 /**
@@ -49,8 +51,8 @@ export interface TeamMemberRow {
   id: string
   name: string
   role: 'lead' | 'teammate'
-  /** Durable lifecycle, as the projection publishes it. */
-  phase: SidebarTeamMemberProjection['phase']
+  /** rc.1 durable lifecycle; absent on the catalog-backed rc.2 roster. */
+  phase?: SidebarTeamMemberProjection['phase']
   /** Derived display status: durable phase wins, else the live activity flag. */
   status: 'running' | 'idle' | 'provisioning' | 'failed'
   /** The durable provisioning error as a one-item list (see the header). */
@@ -76,7 +78,8 @@ export function teamProjectionOf(
   rootId: string | undefined,
 ): SidebarTeamProjection | undefined {
   if (rootId === undefined) return undefined
-  return projections?.[rootId]?.values.agentTeam
+  const team = projections?.[rootId]?.values.agentTeam
+  return team?.enabled === false ? undefined : team
 }
 
 /**
@@ -97,8 +100,25 @@ export function teamMembersOf(
   team: SidebarTeamProjection | undefined,
   live: Readonly<Record<string, SidebarChildLiveView | undefined>>,
   byId: Readonly<Record<string, SidebarSessionSummary | undefined>>,
+  rootId?: string,
+  entries: readonly SidebarSubagentCatalogEntry[] = [],
 ): TeamMemberRow[] {
-  if (team === undefined) return []
+  if (team === undefined || team.enabled === false) return []
+  // rc.2 removed the roster from agentTeam. Direct subagents now provide
+  // identities; no lifecycle phase or per-member failure is fabricated.
+  if (team.members === undefined) {
+    if (rootId === undefined) return []
+    const statusOf = (id: string): TeamMemberRow['status'] =>
+      (byId[id]?.running ?? live[id]?.running) === true ? 'running' : 'idle'
+    return [
+      { id: rootId, name: 'lead', role: 'lead', status: statusOf(rootId), diagnostics: [] },
+      ...entries.map(entry => ({
+        id: entry.id, name: entry.name ?? entry.label ?? entry.id,
+        role: 'teammate' as const, status: statusOf(entry.id), diagnostics: [],
+      })),
+    ]
+  }
+  // rc.1 still supplies its own roster, including failed/provisioning rows.
   return team.members.map(member => ({
     id: member.id,
     name: member.name,

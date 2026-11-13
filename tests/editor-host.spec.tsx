@@ -9,6 +9,7 @@
  * only, no editor chrome); file tabs keep the full chrome in both modes.
  */
 // @vitest-environment jsdom
+import { submenuItems } from './submenu-items'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createElement, Profiler, useEffect, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
@@ -1097,7 +1098,7 @@ describe('EditorHost native-tab context-menu actions', { timeout: 120_000 }, () 
         .find(el => el.getAttribute('aria-haspopup') === 'menu')
       expect(parent).toBeDefined()
       act(() => { parent!.click() })
-      const vscodeRow = [...document.querySelectorAll<HTMLElement>('[role="menu"] [role="menu"] [role="menuitem"]')]
+      const vscodeRow = submenuItems(parent!)
         .find(el => el.textContent?.trim() === 'VS Code')
       expect(vscodeRow).toBeDefined()
       await act(async () => {

@@ -62,8 +62,8 @@ export interface TasksAgentNode {
     team?: {
         role: 'lead' | 'teammate';
         name: string;
-        /** Durable lifecycle of the roster row (`provisioning | active | failed`). */
-        phase: SidebarTeamMemberProjection['phase'];
+        /** rc.1 lifecycle; rc.2 does not publish this field. */
+        phase?: SidebarTeamMemberProjection['phase'];
         /** The member's derived display status (see ./team-projection.ts). */
         status: TeamMemberRow['status'];
         diagnostics: string[];

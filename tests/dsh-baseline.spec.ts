@@ -6,6 +6,9 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
 const baseline = '0.2.2-rc.1'
+// Preserve the minimum supported installer/dependency floor while exercising
+// the newest supported host in browser CI.
+const browserHost = '0.2.2-rc.3'
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
 const bash = readFileSync(new URL('../scripts/install.sh', import.meta.url), 'utf8')
 const powershell = readFileSync(new URL('../scripts/install.ps1', import.meta.url), 'utf8')
@@ -47,7 +50,9 @@ describe('DSH host baseline', () => {
   it.each(['\n', '\r\n'])('pins CI with its heap budget and peer resolution intact (%j)', (eol) => {
     // Git may check out YAML as CRLF on Windows; the contract is the same.
     const source = ci.replace(/\r?\n/g, eol)
-    expect(source).toContain(`NODE_OPTIONS: --max-old-space-size=4096${eol}        run: npm install -g @deepseek-ai/dsh@${baseline}${eol}`)
+    expect(source).toContain(`NODE_OPTIONS: --max-old-space-size=4096${eol}        run: npm install -g @deepseek-ai/dsh@${browserHost}${eol}`)
+    expect(source).toContain(`DSH_EXPECT_VERSION: '${browserHost}'`)
+    expect(source).toContain(`DSH_NPX_SPEC: '@deepseek-ai/dsh@${browserHost}'`)
     expect(source).not.toMatch(/^\s*run:.*--legacy-peer-deps/m)
   })
 })

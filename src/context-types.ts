@@ -389,7 +389,9 @@ export interface SidebarAgentPresetsService {
  */
 export interface SidebarAgentTeamsService {
   /** The agent's team membership, or undefined for a non-team/stale agent. */
-  tryMembership(agent: unknown): unknown
+  tryMembership?(agent: unknown): unknown
+  /** rc.2: Team mode is selected per subagent tree. */
+  isEnabled?(agent: unknown): boolean
   /** Create one shared task (CAS-free; ids are server-issued). */
   createTask(agent: unknown, req: SidebarCreateTeamTaskRequest): Promise<SidebarTeamTaskView>
   /** Compare-and-set mutation of one shared task (stale revision → throws). */
@@ -432,13 +434,15 @@ export interface SidebarTeamMemberProjection {
 }
 
 /**
- * The Lead Session's published team state: durable roster identities and
- * phases, member errors, the non-deleted task views (0.1.6's `TeamView` shape,
- * enriched per task exactly like the service's own views), and the first
- * rejected Team record when the board had to stop at its last valid state.
+ * The Lead Session's published board. rc.1 includes a durable roster; rc.2
+ * instead publishes an enabled flag and uses subagentCatalog for identities.
+ * Tasks and board-wide failures keep the same shape on both hosts.
  */
 export interface SidebarTeamProjection {
-  members: readonly SidebarTeamMemberProjection[]
+  /** rc.1 roster; rc.2 moves members to the subagent catalog. */
+  members?: readonly SidebarTeamMemberProjection[]
+  /** rc.2 durable Team-mode selection. */
+  enabled?: boolean
   tasks: readonly SidebarTeamTaskView[]
   failure?: string
 }
@@ -604,6 +608,8 @@ export interface SidebarSubagentCatalogEntry {
   createdAt: number
   /** `unknown` keeps a child visible without claiming continuation support. */
   mode: 'one-shot' | 'continuable' | 'unknown'
+  /** Agent name exposed by the rc.2 catalog. */
+  name?: string
   /** Mode-specific label; continuable children always carry one. */
   label?: string
 }

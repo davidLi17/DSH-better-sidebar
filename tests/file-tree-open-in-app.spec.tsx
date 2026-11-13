@@ -14,6 +14,7 @@
  *     targets show (the file manager target included, so reveal is never lost).
  */
 // @vitest-environment jsdom
+import { submenuItems } from './submenu-items'
 import { beforeAll, afterEach, describe, expect, it, vi } from 'vitest'
 import { createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
@@ -186,7 +187,7 @@ async function openSubmenu(): Promise<void> {
 }
 
 function submenuRows(): HTMLElement[] {
-  return [...document.querySelectorAll<HTMLElement>('[role="menu"] [role="menu"] [role="menuitem"]')]
+  return submenuItems(submenuParent())
 }
 
 function submenuLabels(): string[] {

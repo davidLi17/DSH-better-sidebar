@@ -1,3 +1,13 @@
+## 26.11.14-lhg — 2026-11-14（自用版）
+
+- 选择性等价吸收上游 `bed56758c7c9d7aefb3023cc0efce6c1d93e7b46` 的侧聊 IME 与 Enter 重复按键保护，不整体合并其侧聊重构；保留草稿、图片和 LHG 选区联动。
+- 异步侧聊操作按绑定代际隔离；同一主会话/标签共享未完成创建请求，防止跨会话同号标签互相阻塞和 StrictMode 重复创建。
+- 四处右键菜单同时提供 rc.1 `getAnchorRect` 与 rc.2 `anchorPoint`；保留 peer 下限和安装脚本；浏览器 CI 使用精确 rc.3 宿主。
+- 兼容 rc.2 内置 Agent Team：写任务前检查 Team 模式，团队成员从子代理目录读取；保留 rc.1 的成员状态和原有草稿、选区联动。
+- 本轮从远端基线重新恢复；旧工作区测试证据不作为本候选通过依据。详见 `docs/plans/2026-11-12-sidechat-input-candidate.md`。
+- rc.3 真浏览器检查发现 Mermaid 放大工具栏按钮依赖宿主全局拖拽样式；改为插件自行声明 no-drag，保留全屏遮罩的中性重置。
+- 新环境恢复、rc.3 契约检查与验证结果见 `docs/plans/2026-11-14-dsh-rc3-validation.md`。
+
 ## 26.11.10-lhg — 2026-11-10
 
 - 适配官方 DSH 0.2.2-rc.1：侧聊模型改用 `agent.model.current()/select()`，持久化选择由宿主管理；换模型提示在未公开的 create/resume setup 安装，删除旧插件 ref 缓存。

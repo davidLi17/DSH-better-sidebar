@@ -325,8 +325,8 @@ export function SubagentView(props: {
     [list.projectionsBySession, rootId],
   )
   const teamMembers = useMemo(
-    () => teamMembersOf(team, live, byId),
-    [team, live, byId],
+    () => teamMembersOf(team, live, byId, rootId, rootId === undefined ? [] : catalogs[rootId]?.entries ?? []),
+    [team, live, byId, rootId, catalogs],
   )
 
   // The default view mode comes from the side card prefs (settings select);

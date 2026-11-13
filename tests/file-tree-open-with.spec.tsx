@@ -9,6 +9,7 @@
  * file-tree-open-in-app.spec.tsx.
  */
 // @vitest-environment jsdom
+import { submenuItems } from './submenu-items'
 import { beforeAll, afterEach, describe, expect, it, vi } from 'vitest'
 import { createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
@@ -119,7 +120,7 @@ function menuItems(): HTMLElement[] {
 }
 
 function submenuRows(): HTMLElement[] {
-  return [...document.querySelectorAll<HTMLElement>('[role="menu"] [role="menu"] [role="menuitem"]')]
+  return submenuItems(submenuParent())
 }
 
 function submenuParent(): HTMLElement {
@@ -198,7 +199,7 @@ describe('FileTree plugin open-with menu', () => {
     expect(harness.onToggleOpenWithPin).toHaveBeenCalledWith('cursor')
     expect(harness.onOpenWith).not.toHaveBeenCalled()
     // The menu (and the submenu) stayed open.
-    expect(document.querySelector('[role="menu"] [role="menu"]')).not.toBeNull()
+    expect(submenuItems(submenuParent()).length).toBeGreaterThan(0)
   })
 
   it('selecting a submenu child invokes onOpenWith with the row path and closes the menu', async () => {
@@ -209,7 +210,7 @@ describe('FileTree plugin open-with menu', () => {
     act(() => { zedRow.click() })
     expect(harness.onOpenWith).toHaveBeenCalledWith('zed', '/tmp/a.ts')
     // Selecting closes the row menu entirely.
-    expect(document.querySelector('[role="menu"] [role="menu"]')).toBeNull()
+    expect(document.querySelector('[role="menu"]')).toBeNull()
     expect(menuItems()).toHaveLength(0)
   })
 

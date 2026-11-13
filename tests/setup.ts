@@ -1,3 +1,5 @@
+import { installMissingResizeObserver } from './setup-resize-observer'
+
 /**
  * Vitest global setup.
  *
@@ -21,4 +23,10 @@ if (storage !== undefined) {
     configurable: true,
     writable: true,
   })
+}
+
+// rc.2 host submenus observe their anchor. Only fill jsdom's missing API;
+// never replace a native implementation or a suite's purpose-built mock.
+if (jsdomWindow !== undefined || typeof window !== 'undefined') {
+  installMissingResizeObserver(globalThis)
 }

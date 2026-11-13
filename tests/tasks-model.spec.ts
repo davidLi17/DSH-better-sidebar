@@ -544,3 +544,17 @@ describe('shared task status rule (taskBlocked / taskStatusLabel / taskTone)', (
     expect(taskDotState(facts('pending', true))).toBe('ongoing')
   })
 })
+
+describe('rc.2 Team task owners', () => {
+  it('maps the empty lead path without fabricating a lifecycle phase', () => {
+    const model = agents(buildTasksModel(input({
+      teamMembers: [{ id: 'root', name: 'lead', role: 'lead', status: 'idle', diagnostics: [] }],
+      teamTasks: [{
+        id: 'lead-task', revision: 1, subject: 'Lead task', description: '', status: 'pending',
+        ownerName: '', blockedBy: [], writeScopes: [], ready: true, writeScopeWarnings: [],
+      }],
+    })))
+    expect(model[0]?.tasks?.map(task => task.id)).toEqual(['lead-task'])
+    expect(model[0]?.team?.phase).toBeUndefined()
+  })
+})
